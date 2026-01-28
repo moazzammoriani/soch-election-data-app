@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Election Form Processor</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Dashboard -->
+        <section id="dashboard-section" class="section">
+            <div class="dashboard-header">
+                <h2>Election Form Processor</h2>
+                <button id="new-session-btn">+ New Session</button>
+            </div>
+            <div id="sessions-list"></div>
+        </section>
+
+        <!-- Step 1: Upload PDF -->
+        <section id="upload-section" class="section hidden">
+            <button class="back-btn" id="upload-back-btn">&larr; Dashboard</button>
+            <h2>1. Upload PDF</h2>
+            <input type="file" id="pdf-input" accept=".pdf">
+            <button id="upload-btn">Upload</button>
+            <p id="upload-status"></p>
+        </section>
+
+        <!-- Step 2: Define Candidates -->
+        <section id="schema-section" class="section hidden">
+            <button class="back-btn" id="schema-back-btn">&larr; Dashboard</button>
+            <h2>2. Enter Candidates</h2>
+            <div class="candidate-inputs">
+                <div class="candidate-row">
+                    <label>Candidate 1:</label>
+                    <input type="text" id="candidate1-name" placeholder="Name (e.g., Farooq Sattar)">
+                    <label>Row:</label>
+                    <input type="number" id="candidate1-row" placeholder="Row #" min="1">
+                </div>
+                <div class="candidate-row">
+                    <label>Candidate 2:</label>
+                    <input type="text" id="candidate2-name" placeholder="Name (e.g., Aftab Jehangir)">
+                    <label>Row:</label>
+                    <input type="number" id="candidate2-row" placeholder="Row #" min="1">
+                </div>
+            </div>
+            <button id="save-schema-btn">Continue</button>
+        </section>
+
+        <!-- Step 3: Main Processing View -->
+        <section id="process-section" class="section hidden">
+            <button class="back-btn" id="process-back-btn">&larr; Dashboard</button>
+            <div class="process-header">
+                <h2>3. Process Forms</h2>
+                <div id="progress-info">
+                    <span id="progress-text">0 / 0 pages processed</span>
+                    <progress id="progress-bar" value="0" max="100"></progress>
+                </div>
+            </div>
+
+            <!-- Page Selector -->
+            <div id="page-selector">
+                <h3>Select Pages for This Form</h3>
+                <p>Selected: <span id="selected-pages-text">None</span></p>
+                <button id="process-btn">Process Selected Pages</button>
+                <div id="page-thumbnails"></div>
+            </div>
+
+            <!-- Split View: PDF | Form -->
+            <div id="split-view" class="hidden">
+                <div id="pdf-viewer">
+                    <h3>Selected Pages</h3>
+                    <div id="pdf-images"></div>
+                </div>
+                <div id="form-editor">
+                    <h3>Extracted Data</h3>
+                    <div id="form-fields"></div>
+                    <div class="form-actions">
+                        <button id="approve-btn">Approve & Save</button>
+                        <button id="cancel-btn">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Completion -->
+        <section id="complete-section" class="section hidden">
+            <button class="back-btn" id="complete-back-btn">&larr; Dashboard</button>
+            <h2>Processing Complete!</h2>
+            <p>All pages have been processed.</p>
+            <button id="view-results-btn">View Results</button>
+        </section>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
