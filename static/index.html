@@ -58,18 +58,41 @@
                 </div>
             </div>
 
+            <!-- Polling Station Queues -->
+            <div id="queue-section">
+                <div id="pending-queue" class="queue-panel">
+                    <div class="queue-header">
+                        <h3>Pending Queue</h3>
+                        <button id="batch-process-btn" disabled>Process All</button>
+                    </div>
+                    <div id="pending-list" class="queue-list"></div>
+                </div>
+
+                <div id="done-queue" class="queue-panel">
+                    <h3>Done (Awaiting Verification)</h3>
+                    <div id="done-list" class="queue-list"></div>
+                </div>
+
+                <div id="approved-queue" class="queue-panel">
+                    <h3>Approved</h3>
+                    <div id="approved-list" class="queue-list"></div>
+                </div>
+            </div>
+
             <!-- Page Selector -->
             <div id="page-selector">
-                <h3>Select Pages for This Form</h3>
+                <h3>Select Pages</h3>
                 <p>Selected: <span id="selected-pages-text">None</span></p>
-                <button id="process-btn">Process Selected Pages</button>
+                <button id="create-station-btn" disabled>Create Polling Station</button>
                 <div id="page-thumbnails"></div>
             </div>
 
             <!-- Split View: PDF | Form -->
             <div id="split-view" class="hidden">
+                <button class="back-btn" id="split-view-back-btn">&larr; Back to Queue</button>
+                <div id="split-view-container">
                 <div id="pdf-viewer">
-                    <h3>Selected Pages</h3>
+                    <h3 id="split-view-title">Selected Pages</h3>
                     <div id="pdf-images"></div>
                 </div>
                 <div id="form-editor">
@@ -77,8 +100,8 @@
                     <div id="form-fields"></div>
                     <div class="form-actions">
                         <button id="approve-btn">Approve & Save</button>
-                        <button id="cancel-btn">Cancel</button>
                     </div>
+                </div>
                 </div>
             </div>
         </section>

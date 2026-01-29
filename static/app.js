@@ -1,9 +1,11 @@
 // State
 let pageCount = 0;
-let processedPages = new Set();
 let selectedPages = new Set();
 let schemaFields = [];
 let currentFormData = null;
+let currentStationId = null;
+let pollingStations = { pending: [], processed: [], approved: [] };
+let usedPages = new Set(); // Pages already in polling stations
 
 // DOM Elements
 const dashboardSection = document.getElementById('dashboard-section');
@@ -23,16 +25,21 @@ const saveSchemaBtn = document.getElementById('save-schema-btn');
 
 const pageThumbnails = document.getElementById('page-thumbnails');
 const selectedPagesText = document.getElementById('selected-pages-text');
-const processBtn = document.getElementById('process-btn');
-const progressText = document.getElementById('progress-text');
-const progressBar = document.getElementById('progress-bar');
+const createStationBtn = document.getElementById('create-station-btn');
+
+const pendingList = document.getElementById('pending-list');
+const doneList = document.getElementById('done-list');
+const approvedList = document.getElementById('approved-list');
+const batchProcessBtn = document.getElementById('batch-process-btn');
 
 const splitView = document.getElementById('split-view');
 const pageSelector = document.getElementById('page-selector');
+const queueSection = document.getElementById('queue-section');
 const pdfImages = document.getElementById('pdf-images');
 const formFields = document.getElementById('form-fields');
 const approveBtn = document.getElementById('approve-btn');
-const cancelBtn = document.getElementById('cancel-btn');
+const splitViewBackBtn = document.getElementById('split-view-back-btn');
+const splitViewTitle = document.getElementById('split-view-title');
 
 // --- Dashboard ---
 
@@ -123,10 +130,12 @@ function resetLocalState() {
     document.getElementById('candidate2-name').value = '';
     document.getElementById('candidate2-row').value = '';
     pageCount = 0;
-    processedPages.clear();
     selectedPages.clear();
     schemaFields = [];
     currentFormData = null;
+    currentStationId = null;
+    pollingStations = { pending: [], processed: [], approved: [] };
+    usedPages.clear();
 }
 
 // --- Session Restore ---
@@ -145,7 +154,6 @@ async function restoreSession() {
 
         const session = data.session;
         pageCount = session.page_count;
-        processedPages = new Set(session.processed_pages);
         schemaFields = session.schema_fields;
 
         // Restore candidate inputs if available
@@ -162,15 +170,9 @@ async function restoreSession() {
         showStep(session.step);
 
         if (session.step === 'process') {
+            await loadPollingStations();
             renderPageThumbnails();
             updateProgress();
-
-            // If there's pending verification data, restore the split view
-            if (session.pending_pages && session.pending_form_data) {
-                selectedPages = new Set(session.pending_pages);
-                currentFormData = session.pending_form_data;
-                showSplitView(session.pending_pages, session.pending_form_data);
-            }
         }
 
         if (session.pdf_name) {
@@ -245,7 +247,6 @@ uploadBtn.addEventListener('click', async () => {
         if (!res.ok) throw new Error(data.detail);
 
         pageCount = data.page_count;
-        processedPages.clear();
         selectedPages.clear();
         uploadStatus.textContent = `Uploaded: ${data.filename} (${pageCount} pages)`;
 
@@ -287,6 +288,7 @@ saveSchemaBtn.addEventListener('click', async () => {
         schemaFields = schemaData.fields;
 
         showStep('process');
+        await loadPollingStations();
         renderPageThumbnails();
         updateProgress();
     } catch (err) {
@@ -294,14 +296,192 @@ saveSchemaBtn.addEventListener('click', async () => {
     }
 });
 
+// --- Polling Station Queue ---
+
+async function loadPollingStations() {
+    try {
+        const res = await fetch('/api/polling-stations');
+        pollingStations = await res.json();
+
+        // Sort each queue by trailing number (e.g., "Polling Station 2" -> 2)
+        const getTrailingNumber = (name) => {
+            const match = name.match(/(\d+)\s*$/);
+            return match ? parseInt(match[1]) : Infinity;
+        };
+        const sortByNumber = (a, b) => getTrailingNumber(a.name) - getTrailingNumber(b.name);
+        pollingStations.pending.sort(sortByNumber);
+        pollingStations.processed.sort(sortByNumber);
+        pollingStations.approved.sort(sortByNumber);
+
+        // Calculate used pages
+        usedPages.clear();
+        [...pollingStations.pending, ...pollingStations.processed, ...pollingStations.approved].forEach(ps => {
+            ps.pages.forEach(p => usedPages.add(p));
+        });
+
+        renderQueues();
+    } catch (err) {
+        console.error('Failed to load polling stations:', err);
+    }
+}
+
+function renderQueueItem(ps, type) {
+    const nameHtml = `
+        <span class="queue-item-name" data-id="${ps.id}">${ps.name}</span>
+        <button class="rename-btn" data-id="${ps.id}" title="Rename">✎</button>
+    `;
+
+    if (type === 'pending') {
+        return `
+            <div class="queue-item" data-id="${ps.id}">
+                <div class="queue-item-header">${nameHtml}</div>
+                <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
+                <div class="queue-item-actions">
+                    <button class="send-btn" data-id="${ps.id}">Send</button>
+                    <button class="danger delete-station-btn" data-id="${ps.id}">Delete</button>
+                </div>
+            </div>
+        `;
+    } else if (type === 'processed') {
+        return `
+            <div class="queue-item" data-id="${ps.id}">
+                <div class="queue-item-header">${nameHtml}</div>
+                <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
+                <div class="queue-item-actions">
+                    <button class="verify-btn" data-id="${ps.id}">Verify</button>
+                    <button class="danger delete-station-btn" data-id="${ps.id}">Delete</button>
+                </div>
+            </div>
+        `;
+    } else {
+        return `
+            <div class="queue-item" data-id="${ps.id}">
+                <div class="queue-item-header">${nameHtml}</div>
+                <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
+                <div class="queue-item-actions">
+                    <button class="danger delete-station-btn" data-id="${ps.id}">Delete</button>
+                </div>
+            </div>
+        `;
+    }
+}
+
+function attachRenameListeners(container) {
+    container.querySelectorAll('.rename-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            startRename(parseInt(btn.dataset.id));
+        });
+    });
+}
+
+async function startRename(stationId) {
+    const nameSpan = document.querySelector(`.queue-item-name[data-id="${stationId}"]`);
+    if (!nameSpan) return;
+
+    const currentName = nameSpan.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = currentName;
+    input.className = 'rename-input';
+
+    nameSpan.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const finishRename = async () => {
+        const newName = input.value.trim();
+        if (!newName || newName === currentName) {
+            // Restore original
+            await loadPollingStations();
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/polling-station/${stationId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: newName }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail);
+
+            await loadPollingStations();
+        } catch (err) {
+            alert(`Error: ${err.message}`);
+            await loadPollingStations();
+        }
+    };
+
+    input.addEventListener('blur', finishRename);
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            input.blur();
+        } else if (e.key === 'Escape') {
+            input.value = currentName;
+            input.blur();
+        }
+    });
+}
+
+function renderQueues() {
+    // Pending queue
+    if (pollingStations.pending.length === 0) {
+        pendingList.innerHTML = '<p class="empty-queue">No pending stations</p>';
+        batchProcessBtn.disabled = true;
+    } else {
+        batchProcessBtn.disabled = false;
+        pendingList.innerHTML = pollingStations.pending.map(ps => renderQueueItem(ps, 'pending')).join('');
+
+        // Add event listeners
+        pendingList.querySelectorAll('.send-btn').forEach(btn => {
+            btn.addEventListener('click', () => processSingleStation(parseInt(btn.dataset.id)));
+        });
+        pendingList.querySelectorAll('.delete-station-btn').forEach(btn => {
+            btn.addEventListener('click', () => deletePollingStation(parseInt(btn.dataset.id)));
+        });
+        attachRenameListeners(pendingList);
+    }
+
+    // Done queue
+    if (pollingStations.processed.length === 0) {
+        doneList.innerHTML = '<p class="empty-queue">No stations awaiting verification</p>';
+    } else {
+        doneList.innerHTML = pollingStations.processed.map(ps => renderQueueItem(ps, 'processed')).join('');
+
+        // Add click listeners to open verification
+        doneList.querySelectorAll('.verify-btn').forEach(btn => {
+            btn.addEventListener('click', () => openVerification(parseInt(btn.dataset.id)));
+        });
+        doneList.querySelectorAll('.delete-station-btn').forEach(btn => {
+            btn.addEventListener('click', () => deletePollingStation(parseInt(btn.dataset.id)));
+        });
+        attachRenameListeners(doneList);
+    }
+
+    // Approved queue
+    if (pollingStations.approved.length === 0) {
+        approvedList.innerHTML = '<p class="empty-queue">No approved stations</p>';
+    } else {
+        approvedList.innerHTML = pollingStations.approved.map(ps => renderQueueItem(ps, 'approved')).join('');
+        approvedList.querySelectorAll('.delete-station-btn').forEach(btn => {
+            btn.addEventListener('click', () => deletePollingStation(parseInt(btn.dataset.id)));
+        });
+        attachRenameListeners(approvedList);
+    }
+}
+
 // --- Page Selection ---
 
 function renderPageThumbnails() {
     pageThumbnails.innerHTML = '';
     for (let i = 0; i < pageCount; i++) {
+        // Skip pages that are already in polling stations
+        if (usedPages.has(i)) continue;
+
         const div = document.createElement('div');
         div.className = 'page-thumb';
-        if (processedPages.has(i)) div.classList.add('processed');
         if (selectedPages.has(i)) div.classList.add('selected');
 
         div.innerHTML = `
@@ -311,7 +491,6 @@ function renderPageThumbnails() {
         div.dataset.page = i;
 
         div.addEventListener('click', () => {
-            if (processedPages.has(i)) return; // Can't select processed pages
             if (selectedPages.has(i)) {
                 selectedPages.delete(i);
                 div.classList.remove('selected');
@@ -330,39 +509,43 @@ function renderPageThumbnails() {
 function updateSelectedText() {
     if (selectedPages.size === 0) {
         selectedPagesText.textContent = 'None';
+        createStationBtn.disabled = true;
     } else {
         const sorted = Array.from(selectedPages).sort((a, b) => a - b);
         selectedPagesText.textContent = sorted.map(p => p + 1).join(', ');
+        createStationBtn.disabled = false;
     }
 }
 
 function updateProgress() {
-    const processed = processedPages.size;
-    progressText.textContent = `${processed} / ${pageCount} pages processed`;
-    progressBar.value = pageCount > 0 ? (processed / pageCount) * 100 : 0;
-    progressBar.max = 100;
+    const processed = pollingStations.approved.length;
+    const total = pollingStations.pending.length + pollingStations.processed.length + pollingStations.approved.length;
+    const progressText = document.getElementById('progress-text');
+    const progressBar = document.getElementById('progress-bar');
 
-    // Check if complete
-    if (processed >= pageCount && pageCount > 0) {
+    if (total === 0) {
+        progressText.textContent = 'No polling stations created yet';
+        progressBar.value = 0;
+    } else {
+        progressText.textContent = `${processed} / ${total} polling stations approved`;
+        progressBar.value = (processed / total) * 100;
+    }
+
+    // Check if complete (all pages used and all approved)
+    if (usedPages.size >= pageCount && pollingStations.pending.length === 0 && pollingStations.processed.length === 0) {
         showStep('complete');
     }
 }
 
-// --- Process Pages ---
+// --- Create Polling Station ---
 
-processBtn.addEventListener('click', async () => {
-    if (selectedPages.size === 0) {
-        alert('Please select at least one page');
-        return;
-    }
-
-    processBtn.disabled = true;
-    processBtn.textContent = 'Processing...';
+createStationBtn.addEventListener('click', async () => {
+    if (selectedPages.size === 0) return;
 
     const pages = Array.from(selectedPages).sort((a, b) => a - b);
 
     try {
-        const res = await fetch('/api/process', {
+        const res = await fetch('/api/polling-station', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pages }),
@@ -370,33 +553,124 @@ processBtn.addEventListener('click', async () => {
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail);
 
-        currentFormData = data;
-        showSplitView(pages, data);
+        // Clear selection and refresh
+        selectedPages.clear();
+        await loadPollingStations();
+        renderPageThumbnails();
+        updateProgress();
     } catch (err) {
         alert(`Error: ${err.message}`);
-    } finally {
-        processBtn.disabled = false;
-        processBtn.textContent = 'Process Selected Pages';
     }
 });
 
-// --- Split View ---
+// --- Process Polling Stations ---
 
-function showSplitView(pages, formData) {
-    pageSelector.classList.add('hidden');
-    splitView.classList.remove('hidden');
+async function processSingleStation(stationId) {
+    const btn = pendingList.querySelector(`.send-btn[data-id="${stationId}"]`);
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Processing...';
+    }
 
-    // Render PDF images
-    pdfImages.innerHTML = '';
-    pages.forEach(p => {
-        const img = document.createElement('img');
-        img.src = `/api/page/${p}/image`;
-        img.alt = `Page ${p + 1}`;
-        pdfImages.appendChild(img);
+    try {
+        const res = await fetch(`/api/polling-station/${stationId}/process`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+
+        await loadPollingStations();
+        renderPageThumbnails();
+        updateProgress();
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Send';
+        }
+    }
+}
+
+batchProcessBtn.addEventListener('click', async () => {
+    batchProcessBtn.disabled = true;
+    batchProcessBtn.textContent = 'Processing...';
+
+    // Disable all individual send buttons
+    pendingList.querySelectorAll('.send-btn').forEach(btn => {
+        btn.disabled = true;
+        btn.textContent = 'Processing...';
     });
 
-    // Render form fields
-    renderFormFields(formData);
+    try {
+        const res = await fetch('/api/polling-stations/batch-process', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+
+        if (data.errors.length > 0) {
+            alert(`Some stations failed to process: ${data.errors.map(e => e.error).join(', ')}`);
+        }
+
+        await loadPollingStations();
+        renderPageThumbnails();
+        updateProgress();
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    } finally {
+        batchProcessBtn.disabled = false;
+        batchProcessBtn.textContent = 'Process All';
+    }
+});
+
+// --- Delete Polling Station ---
+
+async function deletePollingStation(stationId) {
+    if (!confirm('Delete this polling station? Its pages will be available for reselection.')) return;
+
+    try {
+        const res = await fetch(`/api/polling-station/${stationId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+
+        await loadPollingStations();
+        renderPageThumbnails();
+        updateProgress();
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    }
+}
+
+// --- Verification ---
+
+async function openVerification(stationId) {
+    try {
+        const res = await fetch(`/api/polling-station/${stationId}`);
+        const station = await res.json();
+        if (!res.ok) throw new Error(station.detail);
+
+        currentStationId = stationId;
+        currentFormData = station.form_data;
+
+        // Show split view, hide other elements
+        pageSelector.classList.add('hidden');
+        queueSection.classList.add('hidden');
+        document.getElementById('process-back-btn').classList.add('hidden');
+        splitView.classList.remove('hidden');
+
+        // Set title
+        splitViewTitle.textContent = station.name;
+
+        // Render PDF images
+        pdfImages.innerHTML = '';
+        station.pages.forEach(p => {
+            const img = document.createElement('img');
+            img.src = `/api/page/${p}/image`;
+            img.alt = `Page ${p + 1}`;
+            pdfImages.appendChild(img);
+        });
+
+        // Render form fields
+        renderFormFields(station.form_data);
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    }
 }
 
 function renderFormFields(formData) {
@@ -442,28 +716,30 @@ function renderFormFields(formData) {
     });
 }
 
-// --- Approve / Cancel ---
+// --- Approve / Back ---
 
 approveBtn.addEventListener('click', async () => {
-    const pages = Array.from(selectedPages).sort((a, b) => a - b);
+    if (!currentStationId) return;
 
     try {
-        const res = await fetch('/api/approve', {
+        const res = await fetch(`/api/polling-station/${currentStationId}/approve`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pages, form_data: currentFormData }),
+            body: JSON.stringify({ form_data: currentFormData }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail);
 
-        // Update processed pages
-        data.processed_pages.forEach(p => processedPages.add(p));
-        selectedPages.clear();
+        currentStationId = null;
         currentFormData = null;
 
-        // Go back to page selector
+        // Go back to queue view
         splitView.classList.add('hidden');
         pageSelector.classList.remove('hidden');
+        queueSection.classList.remove('hidden');
+        document.getElementById('process-back-btn').classList.remove('hidden');
+
+        await loadPollingStations();
         renderPageThumbnails();
         updateProgress();
     } catch (err) {
@@ -471,15 +747,13 @@ approveBtn.addEventListener('click', async () => {
     }
 });
 
-cancelBtn.addEventListener('click', async () => {
-    // Clear pending data from backend
-    await fetch('/api/session/clear-pending', { method: 'POST' });
-
-    selectedPages.clear();
+splitViewBackBtn.addEventListener('click', () => {
+    currentStationId = null;
     currentFormData = null;
     splitView.classList.add('hidden');
     pageSelector.classList.remove('hidden');
-    renderPageThumbnails();
+    queueSection.classList.remove('hidden');
+    document.getElementById('process-back-btn').classList.remove('hidden');
 });
 
 // --- Completion ---
