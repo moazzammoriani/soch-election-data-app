@@ -33,6 +33,7 @@ const doneList = document.getElementById('done-list');
 const approvedList = document.getElementById('approved-list');
 const batchProcessBtn = document.getElementById('batch-process-btn');
 const bulkApproveBtn = document.getElementById('bulk-approve-btn');
+const exportCsvBtn = document.getElementById('export-csv-btn');
 
 const splitView = document.getElementById('split-view');
 const pageSelector = document.getElementById('page-selector');
@@ -42,6 +43,9 @@ const formFields = document.getElementById('form-fields');
 const approveBtn = document.getElementById('approve-btn');
 const splitViewBackBtn = document.getElementById('split-view-back-btn');
 const splitViewTitle = document.getElementById('split-view-title');
+const prevStationBtn = document.getElementById('prev-station-btn');
+const nextStationBtn = document.getElementById('next-station-btn');
+const stationNavInfo = document.getElementById('station-nav-info');
 
 // --- Dashboard ---
 
@@ -469,7 +473,9 @@ function renderQueues() {
     // Approved queue
     if (pollingStations.approved.length === 0) {
         approvedList.innerHTML = '<p class="empty-queue">No approved stations</p>';
+        exportCsvBtn.disabled = true;
     } else {
+        exportCsvBtn.disabled = false;
         approvedList.innerHTML = pollingStations.approved.map(ps => renderQueueItem(ps, 'approved')).join('');
         approvedList.querySelectorAll('.view-btn').forEach(btn => {
             btn.addEventListener('click', () => openStation(parseInt(btn.dataset.id), 'approved'));
@@ -651,6 +657,10 @@ bulkApproveBtn.addEventListener('click', async () => {
     }
 });
 
+exportCsvBtn.addEventListener('click', () => {
+    window.location.href = '/api/polling-stations/export';
+});
+
 // --- Delete Polling Station ---
 
 async function deletePollingStation(stationId) {
@@ -697,6 +707,9 @@ async function openStation(stationId, status) {
             approveBtn.textContent = 'Approve & Save';
         }
 
+        // Update prev/next navigation for approved stations
+        updateStationNav(stationId, status);
+
         // Render PDF images
         pdfImages.innerHTML = '';
         station.pages.forEach(p => {
@@ -712,6 +725,51 @@ async function openStation(stationId, status) {
         alert(`Error: ${err.message}`);
     }
 }
+
+function updateStationNav(stationId, status) {
+    if (status !== 'approved') {
+        // Hide navigation for non-approved stations
+        prevStationBtn.classList.add('hidden');
+        nextStationBtn.classList.add('hidden');
+        stationNavInfo.textContent = '';
+        return;
+    }
+
+    prevStationBtn.classList.remove('hidden');
+    nextStationBtn.classList.remove('hidden');
+
+    const approvedIds = pollingStations.approved.map(ps => ps.id);
+    const currentIndex = approvedIds.indexOf(stationId);
+
+    // Update nav info
+    stationNavInfo.textContent = `${currentIndex + 1} of ${approvedIds.length}`;
+
+    // Update button states
+    prevStationBtn.disabled = currentIndex <= 0;
+    nextStationBtn.disabled = currentIndex >= approvedIds.length - 1;
+}
+
+prevStationBtn.addEventListener('click', () => {
+    if (currentStationStatus !== 'approved') return;
+
+    const approvedIds = pollingStations.approved.map(ps => ps.id);
+    const currentIndex = approvedIds.indexOf(currentStationId);
+
+    if (currentIndex > 0) {
+        openStation(approvedIds[currentIndex - 1], 'approved');
+    }
+});
+
+nextStationBtn.addEventListener('click', () => {
+    if (currentStationStatus !== 'approved') return;
+
+    const approvedIds = pollingStations.approved.map(ps => ps.id);
+    const currentIndex = approvedIds.indexOf(currentStationId);
+
+    if (currentIndex < approvedIds.length - 1) {
+        openStation(approvedIds[currentIndex + 1], 'approved');
+    }
+});
 
 function renderFormFields(formData) {
     formFields.innerHTML = '';

@@ -286,6 +286,33 @@ input[type="text"] {
     flex-direction: column;
 }
 
+.split-view-nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.split-view-nav button {
+    margin: 0;
+    padding: 6px 12px;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.station-nav {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+#station-nav-info {
+    font-size: 13px;
+    color: #6b7280;
+    min-width: 60px;
+    text-align: center;
+}
+
 #split-view-container {
     display: flex;
     gap: 20px;
@@ -293,7 +320,6 @@ input[type="text"] {
 }
 
 #pdf-viewer {
-    margin-top: 100px;
     flex: 1;
     background: #1f2937;
     border-radius: 8px;

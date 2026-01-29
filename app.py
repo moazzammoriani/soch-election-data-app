@@ -189,6 +189,7 @@ async def call_gemini_with_retry(contents, response_schema, max_retries: int = 3
                 config=genai.types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=response_schema,
+                    thinking_config=genai.types.ThinkingConfig(thinking_level="low"),
                 ),
             )
             return response
@@ -1090,6 +1091,77 @@ async def update_polling_station_form_data(station_id: int, req: ApprovePollingS
         "id": station_id,
         "status": "updated",
     }
+
+
+@app.get("/api/polling-stations/export")
+async def export_polling_stations_csv(session_id: Optional[str] = Cookie(default=None)):
+    """Export all approved polling stations as a CSV file."""
+    import csv
+    import io
+
+    if not session_id:
+        raise HTTPException(400, "No session")
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT * FROM polling_station_queue WHERE session_id = ? AND status = 'approved' ORDER BY id ASC",
+        (session_id,)
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        raise HTTPException(400, "No approved polling stations to export")
+
+    # Build CSV in memory
+    output = io.StringIO()
+
+    # Collect all field names from all rows to build headers
+    all_field_names = set()
+    stations_data = []
+    for row in rows:
+        form_data = json.loads(row["form_data"]) if row["form_data"] else {}
+        all_field_names.update(form_data.keys())
+        stations_data.append({
+            "name": row["name"],
+            "pages": json.loads(row["pages"]),
+            "form_data": form_data,
+        })
+
+    # Sort field names for consistent column order
+    sorted_fields = sorted(all_field_names)
+
+    # Build header row: name, pages, then flattened form fields
+    headers = ["name", "pages"]
+    for field in sorted_fields:
+        headers.append(f"{field}_type")
+        headers.append(f"{field}_value")
+
+    writer = csv.writer(output)
+    writer.writerow(headers)
+
+    # Write data rows
+    for station in stations_data:
+        row_data = [
+            station["name"],
+            ",".join(str(p + 1) for p in station["pages"]),  # 1-indexed page numbers
+        ]
+        for field in sorted_fields:
+            field_data = station["form_data"].get(field, {})
+            row_data.append(field_data.get("type", ""))
+            row_data.append(field_data.get("value", "") if field_data.get("value") is not None else "")
+        writer.writerow(row_data)
+
+    csv_content = output.getvalue()
+    output.close()
+
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=polling_stations.csv"
+        }
+    )
 
 
 # --- Static files ---

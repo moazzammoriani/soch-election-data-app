@@ -77,7 +77,10 @@
                 </div>
 
                 <div id="approved-queue" class="queue-panel">
-                    <h3>Approved</h3>
+                    <div class="queue-header">
+                        <h3>Approved</h3>
+                        <button id="export-csv-btn" disabled>Export CSV</button>
+                    </div>
                     <div id="approved-list" class="queue-list"></div>
                 </div>
             </div>
@@ -92,7 +95,14 @@
 
             <!-- Split View: PDF | Form -->
             <div id="split-view" class="hidden">
-                <button class="back-btn" id="split-view-back-btn">&larr; Back to Queue</button>
+                <div class="split-view-nav">
+                    <button class="back-btn" id="split-view-back-btn">&larr; Back to Queue</button>
+                    <div class="station-nav">
+                        <button id="prev-station-btn" disabled>&larr; Prev</button>
+                        <span id="station-nav-info"></span>
+                        <button id="next-station-btn" disabled>Next &rarr;</button>
+                    </div>
+                </div>
                 <div id="split-view-container">
                 <div id="pdf-viewer">
                     <h3 id="split-view-title">Selected Pages</h3>
