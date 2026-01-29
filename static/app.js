@@ -4,6 +4,7 @@ let selectedPages = new Set();
 let schemaFields = [];
 let currentFormData = null;
 let currentStationId = null;
+let currentStationStatus = null; // 'processed' or 'approved'
 let pollingStations = { pending: [], processed: [], approved: [] };
 let usedPages = new Set(); // Pages already in polling stations
 
@@ -31,6 +32,7 @@ const pendingList = document.getElementById('pending-list');
 const doneList = document.getElementById('done-list');
 const approvedList = document.getElementById('approved-list');
 const batchProcessBtn = document.getElementById('batch-process-btn');
+const bulkApproveBtn = document.getElementById('bulk-approve-btn');
 
 const splitView = document.getElementById('split-view');
 const pageSelector = document.getElementById('page-selector');
@@ -134,6 +136,7 @@ function resetLocalState() {
     schemaFields = [];
     currentFormData = null;
     currentStationId = null;
+    currentStationStatus = null;
     pollingStations = { pending: [], processed: [], approved: [] };
     usedPages.clear();
 }
@@ -359,6 +362,7 @@ function renderQueueItem(ps, type) {
                 <div class="queue-item-header">${nameHtml}</div>
                 <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
                 <div class="queue-item-actions">
+                    <button class="view-btn" data-id="${ps.id}">View</button>
                     <button class="danger delete-station-btn" data-id="${ps.id}">Delete</button>
                 </div>
             </div>
@@ -447,12 +451,14 @@ function renderQueues() {
     // Done queue
     if (pollingStations.processed.length === 0) {
         doneList.innerHTML = '<p class="empty-queue">No stations awaiting verification</p>';
+        bulkApproveBtn.disabled = true;
     } else {
+        bulkApproveBtn.disabled = false;
         doneList.innerHTML = pollingStations.processed.map(ps => renderQueueItem(ps, 'processed')).join('');
 
         // Add click listeners to open verification
         doneList.querySelectorAll('.verify-btn').forEach(btn => {
-            btn.addEventListener('click', () => openVerification(parseInt(btn.dataset.id)));
+            btn.addEventListener('click', () => openStation(parseInt(btn.dataset.id), 'processed'));
         });
         doneList.querySelectorAll('.delete-station-btn').forEach(btn => {
             btn.addEventListener('click', () => deletePollingStation(parseInt(btn.dataset.id)));
@@ -465,6 +471,9 @@ function renderQueues() {
         approvedList.innerHTML = '<p class="empty-queue">No approved stations</p>';
     } else {
         approvedList.innerHTML = pollingStations.approved.map(ps => renderQueueItem(ps, 'approved')).join('');
+        approvedList.querySelectorAll('.view-btn').forEach(btn => {
+            btn.addEventListener('click', () => openStation(parseInt(btn.dataset.id), 'approved'));
+        });
         approvedList.querySelectorAll('.delete-station-btn').forEach(btn => {
             btn.addEventListener('click', () => deletePollingStation(parseInt(btn.dataset.id)));
         });
@@ -619,6 +628,29 @@ batchProcessBtn.addEventListener('click', async () => {
     }
 });
 
+bulkApproveBtn.addEventListener('click', async () => {
+    const count = pollingStations.processed.length;
+    if (!confirm(`Approve all ${count} stations with their current extracted data?`)) return;
+
+    bulkApproveBtn.disabled = true;
+    bulkApproveBtn.textContent = 'Approving...';
+
+    try {
+        const res = await fetch('/api/polling-stations/bulk-approve', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+
+        await loadPollingStations();
+        renderPageThumbnails();
+        updateProgress();
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    } finally {
+        bulkApproveBtn.disabled = false;
+        bulkApproveBtn.textContent = 'Approve All';
+    }
+});
+
 // --- Delete Polling Station ---
 
 async function deletePollingStation(stationId) {
@@ -637,9 +669,9 @@ async function deletePollingStation(stationId) {
     }
 }
 
-// --- Verification ---
+// --- View/Edit Station ---
 
-async function openVerification(stationId) {
+async function openStation(stationId, status) {
     try {
         const res = await fetch(`/api/polling-station/${stationId}`);
         const station = await res.json();
@@ -647,6 +679,7 @@ async function openVerification(stationId) {
 
         currentStationId = stationId;
         currentFormData = station.form_data;
+        currentStationStatus = status;
 
         // Show split view, hide other elements
         pageSelector.classList.add('hidden');
@@ -656,6 +689,13 @@ async function openVerification(stationId) {
 
         // Set title
         splitViewTitle.textContent = station.name;
+
+        // Update button text based on status
+        if (status === 'approved') {
+            approveBtn.textContent = 'Save Changes';
+        } else {
+            approveBtn.textContent = 'Approve & Save';
+        }
 
         // Render PDF images
         pdfImages.innerHTML = '';
@@ -716,22 +756,34 @@ function renderFormFields(formData) {
     });
 }
 
-// --- Approve / Back ---
+// --- Approve / Save / Back ---
 
 approveBtn.addEventListener('click', async () => {
     if (!currentStationId) return;
 
     try {
-        const res = await fetch(`/api/polling-station/${currentStationId}/approve`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ form_data: currentFormData }),
-        });
+        let res;
+        if (currentStationStatus === 'approved') {
+            // Update existing approved station
+            res = await fetch(`/api/polling-station/${currentStationId}/form-data`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ form_data: currentFormData }),
+            });
+        } else {
+            // Approve a processed station
+            res = await fetch(`/api/polling-station/${currentStationId}/approve`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ form_data: currentFormData }),
+            });
+        }
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail);
 
         currentStationId = null;
         currentFormData = null;
+        currentStationStatus = null;
 
         // Go back to queue view
         splitView.classList.add('hidden');
@@ -750,6 +802,7 @@ approveBtn.addEventListener('click', async () => {
 splitViewBackBtn.addEventListener('click', () => {
     currentStationId = null;
     currentFormData = null;
+    currentStationStatus = null;
     splitView.classList.add('hidden');
     pageSelector.classList.remove('hidden');
     queueSection.classList.remove('hidden');

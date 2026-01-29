@@ -1022,6 +1022,76 @@ async def approve_polling_station(station_id: int, req: ApprovePollingStationReq
     }
 
 
+@app.post("/api/polling-stations/bulk-approve")
+async def bulk_approve_polling_stations(session_id: Optional[str] = Cookie(default=None)):
+    """Approve all processed polling stations with their current form data."""
+    if not session_id:
+        raise HTTPException(400, "No session")
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, pages FROM polling_station_queue WHERE session_id = ? AND status = 'processed'",
+        (session_id,)
+    ).fetchall()
+
+    if not rows:
+        conn.close()
+        return {"approved": [], "count": 0}
+
+    # Approve all processed stations
+    station_ids = [r["id"] for r in rows]
+    conn.execute(
+        f"UPDATE polling_station_queue SET status = 'approved' WHERE id IN ({','.join('?' * len(station_ids))})",
+        station_ids
+    )
+    conn.commit()
+    conn.close()
+
+    # Update session's processed_pages
+    session = get_session(session_id)
+    processed = set(session["processed_pages"])
+    for row in rows:
+        processed.update(json.loads(row["pages"]))
+    update_session(session_id, processed_pages=list(processed))
+
+    return {"approved": station_ids, "count": len(station_ids)}
+
+
+@app.put("/api/polling-station/{station_id}/form-data")
+async def update_polling_station_form_data(station_id: int, req: ApprovePollingStationRequest, session_id: Optional[str] = Cookie(default=None)):
+    """Update form data for an approved polling station."""
+    if not session_id:
+        raise HTTPException(400, "No session")
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM polling_station_queue WHERE id = ? AND session_id = ?",
+        (station_id, session_id)
+    ).fetchone()
+
+    if not row:
+        conn.close()
+        raise HTTPException(404, "Polling station not found")
+
+    if row["status"] != "approved":
+        conn.close()
+        raise HTTPException(400, "Can only update form data for approved polling stations")
+
+    conn.execute(
+        "UPDATE polling_station_queue SET form_data = ? WHERE id = ?",
+        (json.dumps(req.form_data), station_id)
+    )
+    conn.commit()
+    conn.close()
+
+    return {
+        "id": station_id,
+        "status": "updated",
+    }
+
+
 # --- Static files ---
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
