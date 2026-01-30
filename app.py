@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
 
+import cv2
+import numpy as np
 import fitz
 from fastapi import FastAPI, UploadFile, HTTPException, Cookie, Response as FastAPIResponse
 from fastapi.staticfiles import StaticFiles
@@ -14,6 +16,32 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, ConfigDict, create_model
 from google import genai
 from enum import Enum
+
+
+def deskew_image(img: np.ndarray) -> np.ndarray:
+    """Deskew image using Hough line detection."""
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+    lines = cv2.HoughLinesP(edges, 1, np.pi/180, 100, minLineLength=100, maxLineGap=10)
+
+    if lines is None:
+        return img
+
+    angles = []
+    for line in lines:
+        x1, y1, x2, y2 = line[0]
+        angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+        if abs(angle) < 45:
+            angles.append(angle)
+
+    if not angles:
+        return img
+
+    median_angle = np.median(angles)
+    (h, w) = img.shape[:2]
+    center = (w // 2, h // 2)
+    M = cv2.getRotationMatrix2D(center, median_angle, 1.0)
+    return cv2.warpAffine(img, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
 
 
 # --- Vote value schema (fixed) ---
@@ -889,7 +917,18 @@ async def process_single_station(session_id: str, station_id: int) -> dict:
     for page_num in pages:
         page = doc[page_num]
         pix = page.get_pixmap(dpi=150)
-        images.append(pix.tobytes("png"))
+
+        # Convert to numpy array for deskewing
+        img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+        if pix.n == 4:  # RGBA
+            img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+
+        # Apply deskewing
+        deskewed = deskew_image(img)
+
+        # Convert back to PNG bytes
+        _, png_bytes = cv2.imencode('.png', cv2.cvtColor(deskewed, cv2.COLOR_RGB2BGR))
+        images.append(png_bytes.tobytes())
     doc.close()
 
     # Build prompt
