@@ -545,11 +545,6 @@ function updateProgress() {
         progressText.textContent = `${processed} / ${total} polling stations approved`;
         progressBar.value = (processed / total) * 100;
     }
-
-    // Check if complete (all pages used and all approved)
-    if (usedPages.size >= pageCount && pollingStations.pending.length === 0 && pollingStations.processed.length === 0) {
-        showStep('complete');
-    }
 }
 
 // --- Create Polling Station ---

@@ -259,8 +259,6 @@ def get_session_step(session: dict) -> str:
         return "upload"
     if not session["schema_fields"]:
         return "schema"
-    if session["page_count"] > 0 and len(session["processed_pages"]) >= session["page_count"]:
-        return "complete"
     return "process"
 
 
@@ -949,7 +947,7 @@ async def process_polling_station(station_id: int, session_id: Optional[str] = C
 
 @app.post("/api/polling-stations/batch-process")
 async def batch_process_polling_stations(session_id: Optional[str] = Cookie(default=None)):
-    """Process all pending polling stations with rate limiting."""
+    """Process all pending polling stations sequentially."""
     if not session_id:
         raise HTTPException(400, "No session")
 
@@ -966,17 +964,15 @@ async def batch_process_polling_stations(session_id: Optional[str] = Cookie(defa
 
     station_ids = [r["id"] for r in rows]
 
-    # Process all in parallel
-    tasks = [process_single_station(session_id, sid) for sid in station_ids]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
+    # Process one at a time, waiting for each to complete
     processed = []
     errors = []
-    for sid, result in zip(station_ids, results):
-        if isinstance(result, Exception):
-            errors.append({"id": sid, "error": str(result)})
-        else:
+    for sid in station_ids:
+        try:
+            result = await process_single_station(session_id, sid)
             processed.append(result)
+        except Exception as e:
+            errors.append({"id": sid, "error": str(e)})
 
     return {"processed": processed, "errors": errors}
 
