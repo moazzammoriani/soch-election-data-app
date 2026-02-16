@@ -18,14 +18,14 @@ from google import genai
 from enum import Enum
 
 
-def deskew_image(img: np.ndarray) -> np.ndarray:
-    """Deskew image using Hough line detection."""
+def deskew_image(img: np.ndarray) -> tuple[np.ndarray, float]:
+    """Deskew image using Hough line detection. Returns (deskewed_image, skew_angle)."""
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     edges = cv2.Canny(gray, 50, 150, apertureSize=3)
     lines = cv2.HoughLinesP(edges, 1, np.pi/180, 100, minLineLength=100, maxLineGap=10)
 
     if lines is None:
-        return img
+        return img, 0.0
 
     angles = []
     for line in lines:
@@ -35,13 +35,13 @@ def deskew_image(img: np.ndarray) -> np.ndarray:
             angles.append(angle)
 
     if not angles:
-        return img
+        return img, 0.0
 
     median_angle = np.median(angles)
     (h, w) = img.shape[:2]
     center = (w // 2, h // 2)
     M = cv2.getRotationMatrix2D(center, median_angle, 1.0)
-    return cv2.warpAffine(img, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+    return cv2.warpAffine(img, M, (w, h), borderMode=cv2.BORDER_REPLICATE), median_angle
 
 
 # --- Vote value schema (fixed) ---
@@ -468,6 +468,39 @@ def generate_schema_fields(candidate_1: CandidateInfo, candidate_2: CandidateInf
     ]
 
 
+SKEW_THRESHOLD = 1.033  # degrees
+
+
+def compute_flags(form_data: dict, candidate_1_name: str, candidate_2_name: str) -> list[str]:
+    """Compute validation flags for a polling station's form data."""
+    flags = []
+
+    c1_prefix = candidate_1_name.lower().replace(" ", "_")
+    c2_prefix = candidate_2_name.lower().replace(" ", "_")
+
+    # Check col3 vs col6 mismatch for each candidate
+    for prefix, name in [(c1_prefix, candidate_1_name), (c2_prefix, candidate_2_name)]:
+        col3_field = f"{prefix}_col3"
+        col6_field = f"{prefix}_col6"
+
+        col3_data = form_data.get(col3_field, {})
+        col6_data = form_data.get(col6_field, {})
+
+        col3_val = col3_data.get("value")
+        col6_val = col6_data.get("value")
+
+        if col3_val is not None and col6_val is not None and col3_val != col6_val:
+            flags.append(f"vote_mismatch:{name}")
+
+    # Check for excessive skew on any page
+    skew_angles = form_data.get("_skew_angles", [])
+    for i, angle in enumerate(skew_angles):
+        if abs(angle) > SKEW_THRESHOLD:
+            flags.append(f"excessive_skew:page_{i + 1}:{angle:.3f}")
+
+    return flags
+
+
 @app.post("/api/schema")
 async def set_schema(schema: SchemaDefinition, session_id: Optional[str] = Cookie(default=None)):
     if not session_id:
@@ -696,6 +729,10 @@ async def list_polling_stations(session_id: Optional[str] = Cookie(default=None)
     if not session_id:
         return {"pending": [], "processed": [], "approved": []}
 
+    session = get_session(session_id)
+    if not session:
+        return {"pending": [], "processed": [], "approved": []}
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
@@ -706,12 +743,21 @@ async def list_polling_stations(session_id: Optional[str] = Cookie(default=None)
 
     result = {"pending": [], "processed": [], "approved": []}
     for r in rows:
+        form_data = json.loads(r["form_data"]) if r["form_data"] else None
+        flags = []
+        if form_data and session["candidate_1"] and session["candidate_2"]:
+            flags = compute_flags(
+                form_data,
+                session["candidate_1"]["name"],
+                session["candidate_2"]["name"]
+            )
         item = {
             "id": r["id"],
             "name": r["name"],
             "pages": json.loads(r["pages"]),
             "status": r["status"],
-            "form_data": json.loads(r["form_data"]) if r["form_data"] else None,
+            "form_data": form_data,
+            "flags": flags,
         }
         result[r["status"]].append(item)
 
@@ -780,6 +826,10 @@ async def get_polling_station(station_id: int, session_id: Optional[str] = Cooki
     if not session_id:
         raise HTTPException(400, "No session")
 
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(400, "Session not found")
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
@@ -791,12 +841,22 @@ async def get_polling_station(station_id: int, session_id: Optional[str] = Cooki
     if not row:
         raise HTTPException(404, "Polling station not found")
 
+    form_data = json.loads(row["form_data"]) if row["form_data"] else None
+    flags = []
+    if form_data and session["candidate_1"] and session["candidate_2"]:
+        flags = compute_flags(
+            form_data,
+            session["candidate_1"]["name"],
+            session["candidate_2"]["name"]
+        )
+
     return {
         "id": row["id"],
         "name": row["name"],
         "pages": json.loads(row["pages"]),
         "status": row["status"],
-        "form_data": json.loads(row["form_data"]) if row["form_data"] else None,
+        "form_data": form_data,
+        "flags": flags,
     }
 
 
@@ -914,6 +974,7 @@ async def process_single_station(session_id: str, station_id: int) -> dict:
     # Extract page images
     doc = fitz.open(session["pdf_path"])
     images = []
+    skew_angles = []
     for page_num in pages:
         page = doc[page_num]
         pix = page.get_pixmap(dpi=150)
@@ -924,7 +985,8 @@ async def process_single_station(session_id: str, station_id: int) -> dict:
             img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
 
         # Apply deskewing
-        deskewed = deskew_image(img)
+        deskewed, skew_angle = deskew_image(img)
+        skew_angles.append(skew_angle)
 
         # Convert back to PNG bytes
         _, png_bytes = cv2.imencode('.png', cv2.cvtColor(deskewed, cv2.COLOR_RGB2BGR))
@@ -956,6 +1018,9 @@ Extract the data according to the field names in the schema."""
     # Parse result
     result = DynamicForm.model_validate_json(response.text)
     form_data = result.model_dump()
+
+    # Store skew angles as metadata
+    form_data["_skew_angles"] = skew_angles
 
     # Update polling station with form data and status
     conn = sqlite3.connect(DB_PATH)

@@ -455,6 +455,16 @@ input[type="text"] {
     border-color: #2563eb;
 }
 
+.queue-item.flagged {
+    background: #fef2f2;
+    border-color: #f87171;
+}
+
+.queue-item.flagged:hover {
+    background: #fee2e2;
+    border-color: #ef4444;
+}
+
 .queue-item-header {
     display: flex;
     justify-content: space-between;

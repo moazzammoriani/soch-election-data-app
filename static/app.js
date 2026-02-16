@@ -337,10 +337,11 @@ function renderQueueItem(ps, type) {
         <span class="queue-item-name" data-id="${ps.id}">${ps.name}</span>
         <button class="rename-btn" data-id="${ps.id}" title="Rename">✎</button>
     `;
+    const flaggedClass = ps.flags && ps.flags.length > 0 ? ' flagged' : '';
 
     if (type === 'pending') {
         return `
-            <div class="queue-item" data-id="${ps.id}">
+            <div class="queue-item${flaggedClass}" data-id="${ps.id}">
                 <div class="queue-item-header">${nameHtml}</div>
                 <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
                 <div class="queue-item-actions">
@@ -351,7 +352,7 @@ function renderQueueItem(ps, type) {
         `;
     } else if (type === 'processed') {
         return `
-            <div class="queue-item" data-id="${ps.id}">
+            <div class="queue-item${flaggedClass}" data-id="${ps.id}">
                 <div class="queue-item-header">${nameHtml}</div>
                 <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
                 <div class="queue-item-actions">
@@ -362,7 +363,7 @@ function renderQueueItem(ps, type) {
         `;
     } else {
         return `
-            <div class="queue-item" data-id="${ps.id}">
+            <div class="queue-item${flaggedClass}" data-id="${ps.id}">
                 <div class="queue-item-header">${nameHtml}</div>
                 <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
                 <div class="queue-item-actions">
