@@ -4,7 +4,7 @@ let selectedPages = new Set();
 let schemaFields = [];
 let currentFormData = null;
 let currentStationId = null;
-let currentStationStatus = null; // 'processed' or 'approved'
+let currentStationStatus = null; // 'pending', 'processed', or 'approved'
 let pollingStations = { pending: [], processed: [], approved: [] };
 let usedPages = new Set(); // Pages already in polling stations
 
@@ -345,6 +345,7 @@ function renderQueueItem(ps, type) {
                 <div class="queue-item-header">${nameHtml}</div>
                 <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
                 <div class="queue-item-actions">
+                    <button class="view-pending-btn" data-id="${ps.id}">View</button>
                     <button class="send-btn" data-id="${ps.id}">Send</button>
                     <button class="danger delete-station-btn" data-id="${ps.id}">Delete</button>
                 </div>
@@ -444,6 +445,9 @@ function renderQueues() {
         pendingList.innerHTML = pollingStations.pending.map(ps => renderQueueItem(ps, 'pending')).join('');
 
         // Add event listeners
+        pendingList.querySelectorAll('.view-pending-btn').forEach(btn => {
+            btn.addEventListener('click', () => openStation(parseInt(btn.dataset.id), 'pending'));
+        });
         pendingList.querySelectorAll('.send-btn').forEach(btn => {
             btn.addEventListener('click', () => processSingleStation(parseInt(btn.dataset.id)));
         });
@@ -697,9 +701,13 @@ async function openStation(stationId, status) {
         splitViewTitle.textContent = station.name;
 
         // Update button text based on status
-        if (status === 'approved') {
+        if (status === 'pending') {
+            approveBtn.classList.add('hidden');
+        } else if (status === 'approved') {
+            approveBtn.classList.remove('hidden');
             approveBtn.textContent = 'Save Changes';
         } else {
+            approveBtn.classList.remove('hidden');
             approveBtn.textContent = 'Approve & Save';
         }
 
@@ -716,7 +724,11 @@ async function openStation(stationId, status) {
         });
 
         // Render form fields
-        renderFormFields(station.form_data);
+        if (status === 'pending') {
+            formFields.innerHTML = '<p class="empty-queue">Not yet processed</p>';
+        } else {
+            renderFormFields(station.form_data);
+        }
     } catch (err) {
         alert(`Error: ${err.message}`);
     }
