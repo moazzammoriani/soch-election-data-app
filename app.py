@@ -211,7 +211,8 @@ async def call_gemini_with_retry(contents, response_schema, max_retries: int = 3
     for attempt in range(max_retries):
         await gemini_rate_limiter.acquire()
         try:
-            response = gemini_client.models.generate_content(
+            response = await asyncio.to_thread(
+                gemini_client.models.generate_content,
                 model="gemini-3-flash-preview",
                 contents=contents,
                 config=genai.types.GenerateContentConfig(
@@ -971,27 +972,31 @@ async def process_single_station(session_id: str, station_id: int) -> dict:
         **field_definitions,
     )
 
-    # Extract page images
-    doc = fitz.open(session["pdf_path"])
-    images = []
-    skew_angles = []
-    for page_num in pages:
-        page = doc[page_num]
-        pix = page.get_pixmap(dpi=150)
+    # Extract page images (CPU-heavy, run in thread to avoid blocking event loop)
+    def extract_and_deskew():
+        doc = fitz.open(session["pdf_path"])
+        imgs = []
+        angles = []
+        for page_num in pages:
+            page = doc[page_num]
+            pix = page.get_pixmap(dpi=150)
 
-        # Convert to numpy array for deskewing
-        img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-        if pix.n == 4:  # RGBA
-            img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+            # Convert to numpy array for deskewing
+            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+            if pix.n == 4:  # RGBA
+                img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
 
-        # Apply deskewing
-        deskewed, skew_angle = deskew_image(img)
-        skew_angles.append(skew_angle)
+            # Apply deskewing
+            deskewed, skew_angle = deskew_image(img)
+            angles.append(skew_angle)
 
-        # Convert back to PNG bytes
-        _, png_bytes = cv2.imencode('.png', cv2.cvtColor(deskewed, cv2.COLOR_RGB2BGR))
-        images.append(png_bytes.tobytes())
-    doc.close()
+            # Convert back to PNG bytes
+            _, png_bytes = cv2.imencode('.png', cv2.cvtColor(deskewed, cv2.COLOR_RGB2BGR))
+            imgs.append(png_bytes.tobytes())
+        doc.close()
+        return imgs, angles
+
+    images, skew_angles = await asyncio.to_thread(extract_and_deskew)
 
     # Build prompt
     prompt = """Analyze this election form and extract the values into the specified schema.
