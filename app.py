@@ -1233,6 +1233,9 @@ async def export_polling_stations_csv(session_id: Optional[str] = Cookie(default
             "form_data": form_data,
         })
 
+    # Remove internal metadata fields
+    all_field_names = {f for f in all_field_names if not f.startswith("_")}
+
     # Sort field names for consistent column order
     sorted_fields = sorted(all_field_names)
 
