@@ -578,6 +578,62 @@ createStationBtn.addEventListener('click', async () => {
     }
 });
 
+// --- Auto-create Polling Stations ---
+
+document.getElementById('auto-create-btn').addEventListener('click', async () => {
+    const step = parseInt(document.getElementById('pages-per-station').value);
+    if (!step || step < 1) {
+        alert('Please enter a valid number of pages per station');
+        return;
+    }
+
+    // Collect unused pages, sorted ascending
+    const unusedPages = [];
+    for (let i = 0; i < pageCount; i++) {
+        if (!usedPages.has(i)) unusedPages.push(i);
+    }
+
+    if (unusedPages.length === 0) {
+        alert('No unused pages remaining');
+        return;
+    }
+
+    // Chunk into groups of `step`
+    const chunks = [];
+    for (let i = 0; i < unusedPages.length; i += step) {
+        chunks.push(unusedPages.slice(i, i + step));
+    }
+
+    const btn = document.getElementById('auto-create-btn');
+    btn.disabled = true;
+
+    try {
+        for (let i = 0; i < chunks.length; i++) {
+            btn.textContent = `Creating... ${i + 1}/${chunks.length}`;
+            const res = await fetch('/api/polling-station', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pages: chunks[i] }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail);
+        }
+
+        selectedPages.clear();
+        await loadPollingStations();
+        renderPageThumbnails();
+        updateProgress();
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+        await loadPollingStations();
+        renderPageThumbnails();
+        updateProgress();
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Automatically Create All Polling Stations';
+    }
+});
+
 // --- Process Polling Stations ---
 
 async function processSingleStation(stationId) {

@@ -570,3 +570,14 @@ input[type="text"] {
 #page-selector {
     margin-top: 50px;
 }
+
+#auto-create-section {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+#pages-per-station {
+    width: 60px;
+}

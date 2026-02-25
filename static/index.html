@@ -90,6 +90,11 @@
                 <h3>Select Pages</h3>
                 <p>Selected: <span id="selected-pages-text">None</span></p>
                 <button id="create-station-btn" disabled>Create Polling Station</button>
+                <div id="auto-create-section">
+                    <label for="pages-per-station">Pages per station:</label>
+                    <input type="number" id="pages-per-station" min="1" max="10" value="1">
+                    <button id="auto-create-btn">Automatically Create All Polling Stations</button>
+                </div>
                 <div id="page-thumbnails"></div>
             </div>
 
