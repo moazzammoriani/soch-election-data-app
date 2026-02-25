@@ -200,8 +200,8 @@ class RateLimiter:
             self.last_request = time.monotonic()
 
 
-# Global rate limiter: 10 req/sec = 600 RPM (safe margin under 1k RPM limit)
-gemini_rate_limiter = RateLimiter(max_per_second=10)
+# Global rate limiter: 15 req/sec = 900 RPM (safe margin under 1k RPM limit)
+gemini_rate_limiter = RateLimiter(max_per_second=15)
 
 
 async def call_gemini_with_retry(contents, response_schema, max_retries: int = 3):
@@ -270,6 +270,10 @@ class ApproveRequest(BaseModel):
 
 class CreatePollingStationRequest(BaseModel):
     pages: list[int]
+
+
+class BatchCreatePollingStationsRequest(BaseModel):
+    page_groups: list[list[int]]
 
 
 class ApprovePollingStationRequest(BaseModel):
@@ -349,6 +353,48 @@ async def delete_session_endpoint(target_session_id: str, response: FastAPIRespo
         response.delete_cookie(key="session_id")
 
     return {"status": "ok"}
+
+
+@app.get("/api/sessions/{target_session_id}/chart-data")
+async def get_chart_data(target_session_id: str):
+    """Get aggregated vote data for charts."""
+    session = get_session(target_session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    if not session["candidate_1"] or not session["candidate_2"]:
+        raise HTTPException(400, "No candidates defined")
+
+    c1_name = session["candidate_1"]["name"]
+    c2_name = session["candidate_2"]["name"]
+    c1_field = c1_name.lower().replace(" ", "_") + "_col3"
+    c2_field = c2_name.lower().replace(" ", "_") + "_col3"
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT name, form_data FROM polling_station_queue WHERE session_id = ? AND status = 'approved' ORDER BY id ASC",
+        (target_session_id,)
+    ).fetchall()
+    conn.close()
+
+    c1_total = 0
+    c2_total = 0
+    per_station = []
+    for row in rows:
+        form_data = json.loads(row["form_data"]) if row["form_data"] else {}
+        c1_val = form_data.get(c1_field, {}).get("value") or 0
+        c2_val = form_data.get(c2_field, {}).get("value") or 0
+        c1_total += c1_val
+        c2_total += c2_val
+        per_station.append({"name": row["name"], "votes": [c1_val, c2_val]})
+
+    return {
+        "pdf_name": session["pdf_name"],
+        "candidates": [c1_name, c2_name],
+        "totals": [c1_total, c2_total],
+        "per_station": per_station,
+    }
 
 
 @app.get("/api/session")
@@ -821,6 +867,65 @@ async def create_polling_station(req: CreatePollingStationRequest, session_id: O
     }
 
 
+@app.post("/api/polling-stations/batch-create")
+async def batch_create_polling_stations(req: BatchCreatePollingStationsRequest, session_id: Optional[str] = Cookie(default=None)):
+    """Create multiple polling stations at once."""
+    if not session_id:
+        raise HTTPException(400, "No session")
+
+    session = get_session(session_id)
+    if not session or not session["pdf_path"]:
+        raise HTTPException(400, "No PDF uploaded")
+
+    # Validate all pages
+    all_pages = [p for group in req.page_groups for p in group]
+    for p in all_pages:
+        if p < 0 or p >= session["page_count"]:
+            raise HTTPException(400, f"Invalid page number: {p}")
+
+    # Check for duplicates within the request
+    if len(all_pages) != len(set(all_pages)):
+        raise HTTPException(400, "Duplicate pages in request")
+
+    # Check pages aren't already used
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    existing = conn.execute(
+        "SELECT pages FROM polling_station_queue WHERE session_id = ?",
+        (session_id,)
+    ).fetchall()
+
+    used_pages = set()
+    for row in existing:
+        used_pages.update(json.loads(row["pages"]))
+
+    for p in all_pages:
+        if p in used_pages:
+            conn.close()
+            raise HTTPException(400, f"Page {p + 1} is already in another polling station")
+
+    # Get current count for naming
+    count = conn.execute(
+        "SELECT COUNT(*) FROM polling_station_queue WHERE session_id = ?",
+        (session_id,)
+    ).fetchone()[0]
+
+    # Insert all in one transaction
+    stations = []
+    for i, pages in enumerate(req.page_groups):
+        name = f"Polling Station {count + i + 1}"
+        cursor = conn.execute(
+            "INSERT INTO polling_station_queue (session_id, name, pages, status) VALUES (?, ?, ?, 'pending')",
+            (session_id, name, json.dumps(pages))
+        )
+        stations.append({"id": cursor.lastrowid, "name": name, "pages": pages, "status": "pending"})
+
+    conn.commit()
+    conn.close()
+
+    return {"stations": stations}
+
+
 @app.get("/api/polling-station/{station_id}")
 async def get_polling_station(station_id: int, session_id: Optional[str] = Cookie(default=None)):
     """Get a specific polling station's details."""
@@ -892,6 +997,45 @@ async def delete_polling_station(station_id: int, session_id: Optional[str] = Co
     conn.close()
 
     return {"status": "ok", "freed_pages": pages}
+
+
+@app.delete("/api/polling-stations/by-status/{status}")
+async def delete_all_by_status(status: str, session_id: Optional[str] = Cookie(default=None)):
+    """Delete all polling stations with the given status."""
+    if not session_id:
+        raise HTTPException(400, "No session")
+    if status not in ("pending", "processed", "approved"):
+        raise HTTPException(400, "Invalid status")
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, pages FROM polling_station_queue WHERE session_id = ? AND status = ?",
+        (session_id, status)
+    ).fetchall()
+
+    if not rows:
+        conn.close()
+        return {"deleted": 0}
+
+    # If deleting approved stations, update processed_pages in session
+    if status == "approved":
+        all_pages = set()
+        for row in rows:
+            all_pages.update(json.loads(row["pages"]))
+        session = get_session(session_id)
+        processed = set(session["processed_pages"])
+        processed.difference_update(all_pages)
+        update_session(session_id, processed_pages=list(processed))
+
+    conn.execute(
+        "DELETE FROM polling_station_queue WHERE session_id = ? AND status = ?",
+        (session_id, status)
+    )
+    conn.commit()
+    conn.close()
+
+    return {"deleted": len(rows)}
 
 
 @app.patch("/api/polling-station/{station_id}")
@@ -1073,15 +1217,20 @@ async def batch_process_polling_stations(session_id: Optional[str] = Cookie(defa
 
     station_ids = [r["id"] for r in rows]
 
-    # Process one at a time, waiting for each to complete
+    # Process concurrently with a semaphore to limit parallelism
+    sem = asyncio.Semaphore(300)
     processed = []
     errors = []
-    for sid in station_ids:
-        try:
-            result = await process_single_station(session_id, sid)
-            processed.append(result)
-        except Exception as e:
-            errors.append({"id": sid, "error": str(e)})
+
+    async def process_one(sid):
+        async with sem:
+            try:
+                result = await process_single_station(session_id, sid)
+                processed.append(result)
+            except Exception as e:
+                errors.append({"id": sid, "error": str(e)})
+
+    await asyncio.gather(*[process_one(sid) for sid in station_ids])
 
     return {"processed": processed, "errors": errors}
 

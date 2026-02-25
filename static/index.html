@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Election Form Processor</title>
     <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div id="app">
@@ -23,6 +24,7 @@
             <h2>1. Upload PDF</h2>
             <input type="file" id="pdf-input" accept=".pdf">
             <button id="upload-btn">Upload</button>
+            <progress id="upload-progress" value="0" max="100" class="hidden"></progress>
             <p id="upload-status"></p>
         </section>
 
@@ -30,6 +32,7 @@
         <section id="schema-section" class="section hidden">
             <button class="back-btn" id="schema-back-btn">&larr; Dashboard</button>
             <h2>2. Enter Candidates</h2>
+            <p id="schema-pdf-name" class="schema-pdf-info"></p>
             <div class="candidate-inputs">
                 <div class="candidate-row">
                     <label>Candidate 1:</label>
@@ -63,7 +66,10 @@
                 <div id="pending-queue" class="queue-panel">
                     <div class="queue-header">
                         <h3>Pending Queue</h3>
-                        <button id="batch-process-btn" disabled>Process All</button>
+                        <div class="queue-header-actions">
+                            <button id="batch-process-btn" disabled>Process All</button>
+                            <button class="danger" id="delete-all-pending-btn" disabled>Delete All</button>
+                        </div>
                     </div>
                     <div id="pending-list" class="queue-list"></div>
                 </div>
@@ -71,7 +77,10 @@
                 <div id="done-queue" class="queue-panel">
                     <div class="queue-header">
                         <h3>Done (Awaiting Verification)</h3>
-                        <button id="bulk-approve-btn" disabled>Approve All</button>
+                        <div class="queue-header-actions">
+                            <button id="bulk-approve-btn" disabled>Approve All</button>
+                            <button class="danger" id="delete-all-processed-btn" disabled>Delete All</button>
+                        </div>
                     </div>
                     <div id="done-list" class="queue-list"></div>
                 </div>
@@ -79,7 +88,10 @@
                 <div id="approved-queue" class="queue-panel">
                     <div class="queue-header">
                         <h3>Approved</h3>
-                        <button id="export-csv-btn" disabled>Export CSV</button>
+                        <div class="queue-header-actions">
+                            <button id="export-csv-btn" disabled>Export CSV</button>
+                            <button class="danger" id="delete-all-approved-btn" disabled>Delete All</button>
+                        </div>
                     </div>
                     <div id="approved-list" class="queue-list"></div>
                 </div>
@@ -95,7 +107,8 @@
                     <input type="number" id="pages-per-station" min="1" max="10" value="1">
                     <button id="auto-create-btn">Automatically Create All Polling Stations</button>
                 </div>
-                <div id="page-thumbnails"></div>
+                <button id="toggle-thumbnails-btn">Show Thumbnails</button>
+                <div id="page-thumbnails" class="hidden"></div>
             </div>
 
             <!-- Split View: PDF | Form -->
@@ -121,6 +134,15 @@
                     </div>
                 </div>
                 </div>
+            </div>
+        </section>
+
+        <!-- Charts -->
+        <section id="chart-section" class="section hidden">
+            <button class="back-btn" id="chart-back-btn">&larr; Dashboard</button>
+            <h2 id="chart-title">Vote Totals</h2>
+            <div id="chart-container">
+                <canvas id="vote-chart"></canvas>
             </div>
         </section>
 

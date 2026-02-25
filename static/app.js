@@ -14,6 +14,7 @@ const uploadSection = document.getElementById('upload-section');
 const schemaSection = document.getElementById('schema-section');
 const processSection = document.getElementById('process-section');
 const completeSection = document.getElementById('complete-section');
+const chartSection = document.getElementById('chart-section');
 
 const sessionsList = document.getElementById('sessions-list');
 const newSessionBtn = document.getElementById('new-session-btn');
@@ -85,6 +86,7 @@ function renderSessionsList(sessions) {
                 </div>
                 <div class="session-actions">
                     <button class="continue-btn" data-id="${s.id}">Continue</button>
+                    ${s.step === 'process' ? `<button class="chart-btn" data-id="${s.id}">Charts</button>` : ''}
                     <button class="danger delete-btn" data-id="${s.id}">Delete</button>
                 </div>
             </div>
@@ -98,6 +100,10 @@ function renderSessionsList(sessions) {
 
     sessionsList.querySelectorAll('.delete-btn').forEach(btn => {
         btn.addEventListener('click', () => deleteSession(btn.dataset.id));
+    });
+
+    sessionsList.querySelectorAll('.chart-btn').forEach(btn => {
+        btn.addEventListener('click', () => openCharts(btn.dataset.id));
     });
 }
 
@@ -184,6 +190,7 @@ async function restoreSession() {
 
         if (session.pdf_name) {
             uploadStatus.textContent = `Loaded: ${session.pdf_name} (${pageCount} pages)`;
+            document.getElementById('schema-pdf-name').textContent = `${session.pdf_name} (${pageCount} pages)`;
         }
     } catch (err) {
         console.error('Failed to restore session:', err);
@@ -199,6 +206,7 @@ function showStep(step) {
     schemaSection.classList.add('hidden');
     processSection.classList.add('hidden');
     completeSection.classList.add('hidden');
+    chartSection.classList.add('hidden');
 
     // Show the appropriate section
     switch (step) {
@@ -216,6 +224,9 @@ function showStep(step) {
             break;
         case 'complete':
             completeSection.classList.remove('hidden');
+            break;
+        case 'chart':
+            chartSection.classList.remove('hidden');
             break;
     }
 }
@@ -244,23 +255,45 @@ uploadBtn.addEventListener('click', async () => {
         return;
     }
 
+    const progressBar = document.getElementById('upload-progress');
+    progressBar.classList.remove('hidden');
+    progressBar.value = 0;
     uploadStatus.textContent = 'Uploading...';
+    uploadBtn.disabled = true;
+
     const formData = new FormData();
     formData.append('file', file);
 
     try {
-        const res = await fetch('/api/upload', { method: 'POST', body: formData });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail);
+        const data = await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/upload');
+            xhr.upload.addEventListener('progress', (e) => {
+                if (e.lengthComputable) {
+                    progressBar.value = (e.loaded / e.total) * 100;
+                }
+            });
+            xhr.addEventListener('load', () => {
+                const resp = JSON.parse(xhr.responseText);
+                if (xhr.status >= 400) reject(new Error(resp.detail));
+                else resolve(resp);
+            });
+            xhr.addEventListener('error', () => reject(new Error('Upload failed')));
+            xhr.send(formData);
+        });
 
         pageCount = data.page_count;
         selectedPages.clear();
         uploadStatus.textContent = `Uploaded: ${data.filename} (${pageCount} pages)`;
+        document.getElementById('schema-pdf-name').textContent = `${data.filename} (${pageCount} pages)`;
 
         // Move to schema step
         showStep('schema');
     } catch (err) {
         uploadStatus.textContent = `Error: ${err.message}`;
+    } finally {
+        progressBar.classList.add('hidden');
+        uploadBtn.disabled = false;
     }
 });
 
@@ -437,11 +470,14 @@ async function startRename(stationId) {
 
 function renderQueues() {
     // Pending queue
+    const deleteAllPendingBtn = document.getElementById('delete-all-pending-btn');
     if (pollingStations.pending.length === 0) {
         pendingList.innerHTML = '<p class="empty-queue">No pending stations</p>';
         batchProcessBtn.disabled = true;
+        deleteAllPendingBtn.disabled = true;
     } else {
         batchProcessBtn.disabled = false;
+        deleteAllPendingBtn.disabled = false;
         pendingList.innerHTML = pollingStations.pending.map(ps => renderQueueItem(ps, 'pending')).join('');
 
         // Add event listeners
@@ -458,11 +494,14 @@ function renderQueues() {
     }
 
     // Done queue
+    const deleteAllProcessedBtn = document.getElementById('delete-all-processed-btn');
     if (pollingStations.processed.length === 0) {
         doneList.innerHTML = '<p class="empty-queue">No stations awaiting verification</p>';
         bulkApproveBtn.disabled = true;
+        deleteAllProcessedBtn.disabled = true;
     } else {
         bulkApproveBtn.disabled = false;
+        deleteAllProcessedBtn.disabled = false;
         doneList.innerHTML = pollingStations.processed.map(ps => renderQueueItem(ps, 'processed')).join('');
 
         // Add click listeners to open verification
@@ -476,11 +515,14 @@ function renderQueues() {
     }
 
     // Approved queue
+    const deleteAllApprovedBtn = document.getElementById('delete-all-approved-btn');
     if (pollingStations.approved.length === 0) {
         approvedList.innerHTML = '<p class="empty-queue">No approved stations</p>';
         exportCsvBtn.disabled = true;
+        deleteAllApprovedBtn.disabled = true;
     } else {
         exportCsvBtn.disabled = false;
+        deleteAllApprovedBtn.disabled = false;
         approvedList.innerHTML = pollingStations.approved.map(ps => renderQueueItem(ps, 'approved')).join('');
         approvedList.querySelectorAll('.view-btn').forEach(btn => {
             btn.addEventListener('click', () => openStation(parseInt(btn.dataset.id), 'approved'));
@@ -494,10 +536,28 @@ function renderQueues() {
 
 // --- Page Selection ---
 
-function renderPageThumbnails() {
+let thumbnailsVisible = false;
+let thumbnailsLoaded = false;
+
+document.getElementById('toggle-thumbnails-btn').addEventListener('click', () => {
+    thumbnailsVisible = !thumbnailsVisible;
+    const btn = document.getElementById('toggle-thumbnails-btn');
+    if (thumbnailsVisible) {
+        btn.textContent = 'Hide Thumbnails';
+        pageThumbnails.classList.remove('hidden');
+        if (!thumbnailsLoaded) {
+            loadThumbnails();
+            thumbnailsLoaded = true;
+        }
+    } else {
+        btn.textContent = 'Show Thumbnails';
+        pageThumbnails.classList.add('hidden');
+    }
+});
+
+function loadThumbnails() {
     pageThumbnails.innerHTML = '';
     for (let i = 0; i < pageCount; i++) {
-        // Skip pages that are already in polling stations
         if (usedPages.has(i)) continue;
 
         const div = document.createElement('div');
@@ -522,6 +582,17 @@ function renderPageThumbnails() {
         });
 
         pageThumbnails.appendChild(div);
+    }
+    updateSelectedText();
+}
+
+function renderPageThumbnails() {
+    thumbnailsLoaded = false;
+    if (thumbnailsVisible) {
+        loadThumbnails();
+        thumbnailsLoaded = true;
+    } else {
+        pageThumbnails.innerHTML = '';
     }
     updateSelectedText();
 }
@@ -606,18 +677,16 @@ document.getElementById('auto-create-btn').addEventListener('click', async () =>
 
     const btn = document.getElementById('auto-create-btn');
     btn.disabled = true;
+    btn.textContent = 'Creating...';
 
     try {
-        for (let i = 0; i < chunks.length; i++) {
-            btn.textContent = `Creating... ${i + 1}/${chunks.length}`;
-            const res = await fetch('/api/polling-station', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pages: chunks[i] }),
-            });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.detail);
-        }
+        const res = await fetch('/api/polling-stations/batch-create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ page_groups: chunks }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
 
         selectedPages.clear();
         await loadPollingStations();
@@ -734,6 +803,28 @@ async function deletePollingStation(stationId) {
         alert(`Error: ${err.message}`);
     }
 }
+
+async function deleteAllByStatus(status) {
+    const count = pollingStations[status].length;
+    if (!count) return;
+    if (!confirm(`Delete all ${count} ${status} polling stations?`)) return;
+
+    try {
+        const res = await fetch(`/api/polling-stations/by-status/${status}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+
+        await loadPollingStations();
+        renderPageThumbnails();
+        updateProgress();
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    }
+}
+
+document.getElementById('delete-all-pending-btn').addEventListener('click', () => deleteAllByStatus('pending'));
+document.getElementById('delete-all-processed-btn').addEventListener('click', () => deleteAllByStatus('processed'));
+document.getElementById('delete-all-approved-btn').addEventListener('click', () => deleteAllByStatus('approved'));
 
 // --- View/Edit Station ---
 
@@ -930,6 +1021,53 @@ splitViewBackBtn.addEventListener('click', () => {
     queueSection.classList.remove('hidden');
     document.getElementById('process-back-btn').classList.remove('hidden');
 });
+
+// --- Charts ---
+
+let voteChart = null;
+
+async function openCharts(sessionId) {
+    try {
+        const res = await fetch(`/api/sessions/${sessionId}/chart-data`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+
+        showStep('chart');
+        document.getElementById('chart-title').textContent = `Vote Totals — ${data.pdf_name}`;
+
+        // Destroy previous chart if exists
+        if (voteChart) {
+            voteChart.destroy();
+            voteChart = null;
+        }
+
+        const ctx = document.getElementById('vote-chart').getContext('2d');
+        voteChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: data.candidates,
+                datasets: [{
+                    label: 'Total Votes',
+                    data: data.totals,
+                    backgroundColor: ['#3b82f6', '#ef4444'],
+                }],
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { display: false },
+                },
+                scales: {
+                    y: { beginAtZero: true },
+                },
+            },
+        });
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    }
+}
+
+document.getElementById('chart-back-btn').addEventListener('click', goToDashboard);
 
 // --- Completion ---
 
