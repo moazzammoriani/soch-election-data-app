@@ -13,7 +13,16 @@
         <section id="dashboard-section" class="section">
             <div class="dashboard-header">
                 <h2>Election Form Processor</h2>
-                <button id="new-session-btn">+ New Session</button>
+                <div class="dashboard-actions">
+                    <button id="new-session-btn">+ New Session</button>
+                    <button id="bulk-upload-btn">Bulk Upload</button>
+                    <input type="file" id="bulk-upload-input" accept=".pdf" multiple class="hidden">
+                </div>
+            </div>
+            <div class="sort-controls">
+                <span>Sort by:</span>
+                <button id="sort-by-date" class="sort-btn active-sort">Date</button>
+                <button id="sort-by-name" class="sort-btn">Name</button>
             </div>
             <div id="sessions-list"></div>
         </section>
@@ -54,7 +63,7 @@
         <section id="process-section" class="section hidden">
             <button class="back-btn" id="process-back-btn">&larr; Dashboard</button>
             <div class="process-header">
-                <h2>3. Process Forms</h2>
+                <h2>3. Process Forms — <span id="process-pdf-name"></span></h2>
                 <div id="progress-info">
                     <span id="progress-text">0 / 0 pages processed</span>
                     <progress id="progress-bar" value="0" max="100"></progress>

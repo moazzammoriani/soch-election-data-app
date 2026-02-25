@@ -427,10 +427,7 @@ async def get_session_state(session_id: Optional[str] = Cookie(default=None)):
 
 @app.post("/api/session/reset")
 async def reset_session(response: FastAPIResponse, session_id: Optional[str] = Cookie(default=None)):
-    """Clear current session and start fresh."""
-    if session_id:
-        delete_session(session_id)
-
+    """Start a new session without deleting the current one."""
     new_session_id = create_session()
     response.set_cookie(key="session_id", value=new_session_id, httponly=True, samesite="lax")
     return {"status": "ok", "session_id": new_session_id}
@@ -495,6 +492,37 @@ async def upload_pdf(file: UploadFile, response: FastAPIResponse, session_id: Op
         "filename": file.filename,
         "page_count": page_count,
     }
+
+
+@app.post("/api/upload/bulk")
+async def bulk_upload_pdfs(files: list[UploadFile]):
+    """Upload multiple PDFs, each becoming its own session."""
+    results = []
+    for file in files:
+        if not file.filename.lower().endswith(".pdf"):
+            continue
+
+        sid = create_session()
+        pdf_path = UPLOADS_DIR / f"{sid}.pdf"
+        content = await file.read()
+        pdf_path.write_bytes(content)
+
+        doc = fitz.open(pdf_path)
+        page_count = len(doc)
+        doc.close()
+
+        update_session(
+            sid,
+            pdf_name=file.filename,
+            pdf_path=str(pdf_path),
+            page_count=page_count,
+            processed_pages=[],
+            schema_fields=[],
+        )
+
+        results.append({"id": sid, "pdf_name": file.filename, "page_count": page_count})
+
+    return {"sessions": results}
 
 
 def generate_schema_fields(candidate_1: CandidateInfo, candidate_2: CandidateInfo) -> list[dict]:

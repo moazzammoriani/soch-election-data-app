@@ -50,16 +50,45 @@ const stationNavInfo = document.getElementById('station-nav-info');
 
 // --- Dashboard ---
 
+let dashboardSessions = [];
+let sessionSortBy = localStorage.getItem('sessionSortBy') || 'date';
+
 async function loadDashboard() {
     try {
         const res = await fetch('/api/sessions');
         const data = await res.json();
-        renderSessionsList(data.sessions);
+        dashboardSessions = data.sessions;
+        sortAndRenderSessions();
     } catch (err) {
         console.error('Failed to load sessions:', err);
         sessionsList.innerHTML = '<p class="empty-state">Failed to load sessions</p>';
     }
 }
+
+function sortAndRenderSessions() {
+    const sorted = [...dashboardSessions];
+    if (sessionSortBy === 'name') {
+        sorted.sort((a, b) => (a.pdf_name || '').localeCompare(b.pdf_name || ''));
+    }
+    // 'date' is already the default order from the API (updated_at DESC)
+    renderSessionsList(sorted);
+
+    // Update active sort button
+    document.getElementById('sort-by-date').classList.toggle('active-sort', sessionSortBy === 'date');
+    document.getElementById('sort-by-name').classList.toggle('active-sort', sessionSortBy === 'name');
+}
+
+document.getElementById('sort-by-date').addEventListener('click', () => {
+    sessionSortBy = 'date';
+    localStorage.setItem('sessionSortBy', 'date');
+    sortAndRenderSessions();
+});
+
+document.getElementById('sort-by-name').addEventListener('click', () => {
+    sessionSortBy = 'name';
+    localStorage.setItem('sessionSortBy', 'name');
+    sortAndRenderSessions();
+});
 
 function renderSessionsList(sessions) {
     if (sessions.length === 0) {
@@ -134,6 +163,54 @@ newSessionBtn.addEventListener('click', async () => {
     showStep('upload');
 });
 
+// --- Bulk Upload ---
+
+const bulkUploadBtn = document.getElementById('bulk-upload-btn');
+const bulkUploadInput = document.getElementById('bulk-upload-input');
+
+bulkUploadBtn.addEventListener('click', () => bulkUploadInput.click());
+
+bulkUploadInput.addEventListener('change', async () => {
+    const files = bulkUploadInput.files;
+    if (!files || files.length === 0) return;
+
+    bulkUploadBtn.disabled = true;
+    bulkUploadBtn.textContent = 'Uploading...';
+
+    const formData = new FormData();
+    for (const file of files) {
+        formData.append('files', file);
+    }
+
+    try {
+        const data = await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/upload/bulk');
+            xhr.upload.addEventListener('progress', (e) => {
+                if (e.lengthComputable) {
+                    const pct = Math.round((e.loaded / e.total) * 100);
+                    bulkUploadBtn.textContent = `Uploading... ${pct}%`;
+                }
+            });
+            xhr.addEventListener('load', () => {
+                const resp = JSON.parse(xhr.responseText);
+                if (xhr.status >= 400) reject(new Error(resp.detail));
+                else resolve(resp);
+            });
+            xhr.addEventListener('error', () => reject(new Error('Upload failed')));
+            xhr.send(formData);
+        });
+
+        await loadDashboard();
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    } finally {
+        bulkUploadBtn.disabled = false;
+        bulkUploadBtn.textContent = 'Bulk Upload';
+        bulkUploadInput.value = '';
+    }
+});
+
 function resetLocalState() {
     pdfInput.value = '';
     uploadStatus.textContent = '';
@@ -191,6 +268,7 @@ async function restoreSession() {
         if (session.pdf_name) {
             uploadStatus.textContent = `Loaded: ${session.pdf_name} (${pageCount} pages)`;
             document.getElementById('schema-pdf-name').textContent = `${session.pdf_name} (${pageCount} pages)`;
+            document.getElementById('process-pdf-name').textContent = session.pdf_name;
         }
     } catch (err) {
         console.error('Failed to restore session:', err);
@@ -229,6 +307,9 @@ function showStep(step) {
             chartSection.classList.remove('hidden');
             break;
     }
+
+    // Persist current step in URL hash for reload
+    location.hash = step;
 }
 
 function goToDashboard() {
@@ -236,8 +317,16 @@ function goToDashboard() {
     showStep('dashboard');
 }
 
-// Initialize on page load
-restoreSession();
+// Initialize on page load — restore previous step or default to dashboard
+(async () => {
+    const hash = location.hash.replace('#', '');
+    if (hash && hash !== 'dashboard') {
+        await restoreSession();
+    } else {
+        await loadDashboard();
+        showStep('dashboard');
+    }
+})();
 
 // --- Back Buttons ---
 
@@ -286,6 +375,7 @@ uploadBtn.addEventListener('click', async () => {
         selectedPages.clear();
         uploadStatus.textContent = `Uploaded: ${data.filename} (${pageCount} pages)`;
         document.getElementById('schema-pdf-name').textContent = `${data.filename} (${pageCount} pages)`;
+        document.getElementById('process-pdf-name').textContent = data.filename;
 
         // Move to schema step
         showStep('schema');
@@ -365,12 +455,26 @@ async function loadPollingStations() {
     }
 }
 
+function formatFlag(flag) {
+    if (flag.startsWith('vote_mismatch:')) {
+        return `Vote mismatch: ${flag.split(':')[1]} (col3 != col6)`;
+    }
+    if (flag.startsWith('excessive_skew:')) {
+        const parts = flag.split(':');
+        return `Excessive skew: ${parts[1]} (${parts[2]}°)`;
+    }
+    return flag;
+}
+
 function renderQueueItem(ps, type) {
     const nameHtml = `
         <span class="queue-item-name" data-id="${ps.id}">${ps.name}</span>
         <button class="rename-btn" data-id="${ps.id}" title="Rename">✎</button>
     `;
     const flaggedClass = ps.flags && ps.flags.length > 0 ? ' flagged' : '';
+    const flagsHtml = ps.flags && ps.flags.length > 0
+        ? `<div class="queue-item-flags">${ps.flags.map(f => `<span class="flag-reason">${formatFlag(f)}</span>`).join('')}</div>`
+        : '';
 
     if (type === 'pending') {
         return `
@@ -389,6 +493,7 @@ function renderQueueItem(ps, type) {
             <div class="queue-item${flaggedClass}" data-id="${ps.id}">
                 <div class="queue-item-header">${nameHtml}</div>
                 <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
+                ${flagsHtml}
                 <div class="queue-item-actions">
                     <button class="verify-btn" data-id="${ps.id}">Verify</button>
                     <button class="danger delete-station-btn" data-id="${ps.id}">Delete</button>
@@ -400,6 +505,7 @@ function renderQueueItem(ps, type) {
             <div class="queue-item${flaggedClass}" data-id="${ps.id}">
                 <div class="queue-item-header">${nameHtml}</div>
                 <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
+                ${flagsHtml}
                 <div class="queue-item-actions">
                     <button class="view-btn" data-id="${ps.id}">View</button>
                     <button class="danger delete-station-btn" data-id="${ps.id}">Delete</button>
