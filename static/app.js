@@ -90,39 +90,89 @@ document.getElementById('sort-by-name').addEventListener('click', () => {
     sortAndRenderSessions();
 });
 
-function renderSessionsList(sessions) {
-    if (sessions.length === 0) {
-        sessionsList.innerHTML = '<p class="empty-state">No sessions yet. Click "+ New Session" to start.</p>';
-        return;
-    }
+function renderSessionCard(s) {
+    const progress = s.page_count > 0
+        ? Math.round((s.processed_pages.length / s.page_count) * 100)
+        : 0;
+    const candidates = [s.candidate_1_name, s.candidate_2_name].filter(Boolean).join(' vs ');
 
-    sessionsList.innerHTML = sessions.map(s => {
-        const progress = s.page_count > 0
-            ? Math.round((s.processed_pages.length / s.page_count) * 100)
-            : 0;
-        const candidates = [s.candidate_1_name, s.candidate_2_name].filter(Boolean).join(' vs ');
-
-        return `
-            <div class="session-card" data-id="${s.id}">
-                <div class="session-info">
-                    <h3>${s.pdf_name || 'New Session'}</h3>
-                    <p>${candidates || 'No candidates defined'}${s.seat_type || s.province ? ` — ${[s.seat_type, s.province].filter(Boolean).join(', ')}` : ''}</p>
-                    <div class="session-meta">
-                        <span class="session-status ${s.step}">${s.step}</span>
-                        <span>${s.processed_pages.length} / ${s.page_count} pages</span>
-                        <span>${progress}% complete</span>
-                    </div>
-                </div>
-                <div class="session-actions">
-                    <button class="continue-btn" data-id="${s.id}">Continue</button>
-                    ${s.step === 'process' ? `<button class="chart-btn" data-id="${s.id}">Charts</button>` : ''}
-                    <button class="danger delete-btn" data-id="${s.id}">Delete</button>
+    return `
+        <div class="session-card" data-id="${s.id}">
+            <div class="session-info">
+                <h3>${s.pdf_name || 'New Session'}</h3>
+                <p>${candidates || 'No candidates defined'}</p>
+                <div class="session-meta">
+                    <span class="session-status ${s.step}">${s.step}</span>
+                    <span>${s.processed_pages.length} / ${s.page_count} pages</span>
+                    <span>${progress}% complete</span>
                 </div>
             </div>
-        `;
-    }).join('');
+            <div class="session-actions">
+                <button class="continue-btn" data-id="${s.id}">Continue</button>
+                ${s.step === 'process' ? `<button class="chart-btn" data-id="${s.id}">Charts</button>` : ''}
+                <button class="danger delete-btn" data-id="${s.id}">Delete</button>
+            </div>
+        </div>
+    `;
+}
 
-    // Add event listeners
+function renderSessionsList(sessions) {
+    // Group sessions: province -> seat_type -> [sessions]
+    const grouped = {};
+    for (const s of sessions) {
+        const prov = s.province || 'Uncategorized';
+        const seat = s.seat_type || 'Uncategorized';
+        if (!grouped[prov]) grouped[prov] = {};
+        if (!grouped[prov][seat]) grouped[prov][seat] = [];
+        grouped[prov][seat].push(s);
+    }
+
+    // Always show all 4 provinces + Uncategorized if needed
+    const allProvinces = ['Punjab', 'Sindh', 'KPK', 'Balochistan'];
+    const hasUncategorized = grouped['Uncategorized'];
+    const provinces = [...allProvinces];
+    if (hasUncategorized) provinces.push('Uncategorized');
+
+    const seatOrder = ['National', 'Provincial', 'Uncategorized'];
+
+    let html = '';
+    for (const prov of provinces) {
+        const seatTypes = grouped[prov] || {};
+        const provCount = Object.values(seatTypes).reduce((sum, arr) => sum + arr.length, 0);
+
+        let seatHtml = '';
+        for (const seat of seatOrder) {
+            if (!seatTypes[seat]) continue;
+            const cards = seatTypes[seat].map(renderSessionCard).join('');
+            seatHtml += `
+                <div class="accordion seat-accordion">
+                    <div class="accordion-header">
+                        <span>${seat} <span class="accordion-count">(${seatTypes[seat].length})</span></span>
+                        <span class="accordion-arrow">&#9654;</span>
+                    </div>
+                    <div class="accordion-body">${cards}</div>
+                </div>
+            `;
+        }
+
+        if (!seatHtml) {
+            seatHtml = '<p class="accordion-empty">No sessions</p>';
+        }
+
+        html += `
+            <div class="accordion province-accordion">
+                <div class="accordion-header">
+                    <span>${prov} <span class="accordion-count">(${provCount})</span></span>
+                    <span class="accordion-arrow">&#9654;</span>
+                </div>
+                <div class="accordion-body">${seatHtml}</div>
+            </div>
+        `;
+    }
+
+    sessionsList.innerHTML = html;
+
+    // Add event listeners for session card buttons
     sessionsList.querySelectorAll('.continue-btn').forEach(btn => {
         btn.addEventListener('click', () => switchToSession(btn.dataset.id));
     });
@@ -135,6 +185,16 @@ function renderSessionsList(sessions) {
         btn.addEventListener('click', () => openCharts(btn.dataset.id));
     });
 }
+
+// Accordion toggle via event delegation
+sessionsList.addEventListener('click', (e) => {
+    const header = e.target.closest('.accordion-header');
+    if (!header) return;
+    // Don't toggle if clicking a button inside a session card
+    if (e.target.closest('.session-card')) return;
+    const accordion = header.parentElement;
+    accordion.classList.toggle('open');
+});
 
 async function switchToSession(sessionId) {
     try {

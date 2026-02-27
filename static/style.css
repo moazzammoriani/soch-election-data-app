@@ -76,7 +76,81 @@ h3 {
 
 #sessions-list {
     display: grid;
-    gap: 15px;
+    gap: 12px;
+}
+
+/* Accordion */
+.province-accordion {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #ffffff;
+}
+
+.seat-accordion {
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #f9fafb;
+}
+
+.accordion-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 15px;
+    font-weight: 500;
+    color: #374151;
+}
+
+.accordion-header:hover {
+    background: #f9fafb;
+}
+
+.province-accordion > .accordion-header {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.accordion-arrow {
+    font-size: 10px;
+    color: #9ca3af;
+    transition: transform 0.2s;
+}
+
+.accordion.open > .accordion-header .accordion-arrow {
+    transform: rotate(90deg);
+}
+
+.accordion-body {
+    display: none;
+}
+
+.accordion.open > .accordion-body {
+    display: block;
+    padding: 0 12px 12px;
+}
+
+.accordion-body .seat-accordion + .seat-accordion {
+    margin-top: 8px;
+}
+
+.accordion-body .session-card {
+    margin-top: 8px;
+}
+
+.accordion-count {
+    font-weight: 400;
+    color: #9ca3af;
+    font-size: 13px;
+}
+
+.accordion-empty {
+    padding: 8px 16px;
+    color: #9ca3af;
+    font-size: 13px;
+    margin: 0;
 }
 
 .session-card {
@@ -84,7 +158,7 @@ h3 {
     justify-content: space-between;
     align-items: center;
     padding: 15px;
-    background: #f9fafb;
+    background: #edf0f4;
     border-radius: 8px;
     border: 1px solid #e5e7eb;
 }
