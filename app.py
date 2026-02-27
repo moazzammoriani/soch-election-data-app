@@ -119,6 +119,14 @@ def init_db():
         conn.execute("ALTER TABLE sessions ADD COLUMN pending_form_data TEXT")
     except sqlite3.OperationalError:
         pass
+    try:
+        conn.execute("ALTER TABLE sessions ADD COLUMN province TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE sessions ADD COLUMN seat_type TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -142,6 +150,8 @@ def get_session(session_id: str) -> Optional[dict]:
             "candidate_2": {"name": row["candidate_2_name"], "row": row["candidate_2_row"]} if row["candidate_2_name"] else None,
             "pending_pages": json.loads(row["pending_pages"]) if row["pending_pages"] else None,
             "pending_form_data": json.loads(row["pending_form_data"]) if row["pending_form_data"] else None,
+            "province": row["province"],
+            "seat_type": row["seat_type"],
         }
     return None
 
@@ -257,6 +267,8 @@ class CandidateInfo(BaseModel):
 class SchemaDefinition(BaseModel):
     candidate_1: CandidateInfo
     candidate_2: CandidateInfo
+    province: Optional[str] = None
+    seat_type: Optional[str] = None
 
 
 class ProcessRequest(BaseModel):
@@ -284,7 +296,15 @@ class RenamePollingStationRequest(BaseModel):
     name: str
 
 
+PROVINCES = ["Punjab", "Sindh", "KPK", "Balochistan"]
+
+
 # --- Endpoints ---
+
+@app.get("/api/provinces")
+async def get_provinces():
+    return {"provinces": PROVINCES}
+
 
 def get_session_step(session: dict) -> str:
     """Determine the current step for a session."""
@@ -314,6 +334,8 @@ async def list_sessions():
             "processed_pages": json.loads(row["processed_pages"]),
             "candidate_1_name": row["candidate_1_name"],
             "candidate_2_name": row["candidate_2_name"],
+            "province": row["province"],
+            "seat_type": row["seat_type"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -387,7 +409,12 @@ async def get_chart_data(target_session_id: str):
         c2_val = form_data.get(c2_field, {}).get("value") or 0
         c1_total += c1_val
         c2_total += c2_val
-        per_station.append({"name": row["name"], "votes": [c1_val, c2_val]})
+        registered = form_data.get("total_registered_voters", {}).get("value") or 0
+        row_a = form_data.get("row_a", {}).get("value") or 0
+        row_d = form_data.get("row_d", {}).get("value") or 0
+        votes_cast = row_a if row_a else row_d
+        turnout = (votes_cast / registered) if registered else None
+        per_station.append({"name": row["name"], "votes": [c1_val, c2_val], "turnout": turnout, "registered": registered})
 
     return {
         "pdf_name": session["pdf_name"],
@@ -421,6 +448,8 @@ async def get_session_state(session_id: Optional[str] = Cookie(default=None)):
             "candidate_2": session["candidate_2"],
             "pending_pages": session["pending_pages"],
             "pending_form_data": session["pending_form_data"],
+            "province": session["province"],
+            "seat_type": session["seat_type"],
         }
     }
 
@@ -594,6 +623,8 @@ async def set_schema(schema: SchemaDefinition, session_id: Optional[str] = Cooki
         candidate_1_row=schema.candidate_1.row,
         candidate_2_name=schema.candidate_2.name,
         candidate_2_row=schema.candidate_2.row,
+        province=schema.province,
+        seat_type=schema.seat_type,
     )
 
     return {"status": "ok", "field_count": len(schema_fields)}

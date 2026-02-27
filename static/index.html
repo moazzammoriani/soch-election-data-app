@@ -56,6 +56,22 @@
                     <input type="number" id="candidate2-row" placeholder="Row #" min="1">
                 </div>
             </div>
+            <div class="province-row">
+                <label>Seat Type:</label>
+                <select id="seat-type-select">
+                    <option value="">Select type</option>
+                    <option value="National">National</option>
+                    <option value="Provincial">Provincial</option>
+                </select>
+                <label>Province:</label>
+                <select id="province-select">
+                    <option value="">Select province</option>
+                    <option value="Punjab">Punjab</option>
+                    <option value="Sindh">Sindh</option>
+                    <option value="KPK">KPK</option>
+                    <option value="Balochistan">Balochistan</option>
+                </select>
+            </div>
             <button id="save-schema-btn">Continue</button>
         </section>
 
@@ -150,8 +166,19 @@
         <section id="chart-section" class="section hidden">
             <button class="back-btn" id="chart-back-btn">&larr; Dashboard</button>
             <h2 id="chart-title">Vote Totals</h2>
+            <div class="chart-tabs">
+                <button class="chart-tab active" data-tab="votes">Vote Totals</button>
+                <button class="chart-tab" data-tab="stations-won">Stations Won</button>
+                <button class="chart-tab" data-tab="high-turnout">High Turnout</button>
+                <button class="chart-tab" data-tab="winner-scatter">Winner by Station</button>
+                <button class="chart-tab" data-tab="turnout-by-station">Turnout by Station</button>
+            </div>
             <div id="chart-container">
-                <canvas id="vote-chart"></canvas>
+                <div id="chart-votes"><canvas id="vote-chart"></canvas></div>
+                <div id="chart-stations-won" class="hidden"><canvas id="stations-won-chart"></canvas></div>
+                <div id="chart-high-turnout" class="hidden"><canvas id="high-turnout-chart"></canvas></div>
+                <div id="chart-winner-scatter" class="hidden"><canvas id="winner-scatter-chart"></canvas></div>
+                <div id="chart-turnout-by-station" class="hidden"><canvas id="turnout-by-station-chart"></canvas></div>
             </div>
         </section>
 

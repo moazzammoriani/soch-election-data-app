@@ -106,7 +106,7 @@ function renderSessionsList(sessions) {
             <div class="session-card" data-id="${s.id}">
                 <div class="session-info">
                     <h3>${s.pdf_name || 'New Session'}</h3>
-                    <p>${candidates || 'No candidates defined'}</p>
+                    <p>${candidates || 'No candidates defined'}${s.seat_type || s.province ? ` — ${[s.seat_type, s.province].filter(Boolean).join(', ')}` : ''}</p>
                     <div class="session-meta">
                         <span class="session-status ${s.step}">${s.step}</span>
                         <span>${s.processed_pages.length} / ${s.page_count} pages</span>
@@ -255,6 +255,8 @@ async function restoreSession() {
             document.getElementById('candidate2-name').value = session.candidate_2.name || '';
             document.getElementById('candidate2-row').value = session.candidate_2.row || '';
         }
+        document.getElementById('province-select').value = session.province || '';
+        document.getElementById('seat-type-select').value = session.seat_type || '';
 
         // Show appropriate step
         showStep(session.step);
@@ -395,6 +397,9 @@ saveSchemaBtn.addEventListener('click', async () => {
     const c2Name = document.getElementById('candidate2-name').value.trim();
     const c2Row = parseInt(document.getElementById('candidate2-row').value);
 
+    const province = document.getElementById('province-select').value;
+    const seatType = document.getElementById('seat-type-select').value;
+
     if (!c1Name || !c1Row || !c2Name || !c2Row) {
         alert('Please fill in both candidates with name and row number');
         return;
@@ -407,6 +412,8 @@ saveSchemaBtn.addEventListener('click', async () => {
             body: JSON.stringify({
                 candidate_1: { name: c1Name, row: c1Row },
                 candidate_2: { name: c2Name, row: c2Row },
+                province: province || null,
+                seat_type: seatType || null,
             }),
         });
         const data = await res.json();
@@ -1131,6 +1138,289 @@ splitViewBackBtn.addEventListener('click', () => {
 // --- Charts ---
 
 let voteChart = null;
+let stationsWonChart = null;
+let highTurnoutChart = null;
+let winnerScatterChart = null;
+let turnoutByStationChart = null;
+let chartData = null;
+
+function destroyCharts() {
+    if (voteChart) { voteChart.destroy(); voteChart = null; }
+    if (stationsWonChart) { stationsWonChart.destroy(); stationsWonChart = null; }
+    if (highTurnoutChart) { highTurnoutChart.destroy(); highTurnoutChart = null; }
+    if (winnerScatterChart) { winnerScatterChart.destroy(); winnerScatterChart = null; }
+    if (turnoutByStationChart) { turnoutByStationChart.destroy(); turnoutByStationChart = null; }
+}
+
+function renderVoteTotalsChart(data) {
+    if (voteChart) { voteChart.destroy(); voteChart = null; }
+    const ctx = document.getElementById('vote-chart').getContext('2d');
+    voteChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: data.candidates,
+            datasets: [{
+                label: 'Total Votes',
+                data: data.totals,
+                backgroundColor: ['#3b82f6', '#ef4444'],
+            }],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true } },
+        },
+    });
+}
+
+function renderStationsWonChart(data) {
+    if (stationsWonChart) { stationsWonChart.destroy(); stationsWonChart = null; }
+
+    // Count stations won per candidate (highest votes wins)
+    const wins = data.candidates.map(() => 0);
+    let ties = 0;
+    for (const station of data.per_station) {
+        const maxVotes = Math.max(...station.votes);
+        if (maxVotes === 0) continue;
+        const winners = station.votes.filter(v => v === maxVotes);
+        if (winners.length > 1) {
+            ties++;
+        } else {
+            wins[station.votes.indexOf(maxVotes)]++;
+        }
+    }
+
+    const ctx = document.getElementById('stations-won-chart').getContext('2d');
+    const labels = [...data.candidates];
+    const barData = [...wins];
+    const colors = ['#3b82f6', '#ef4444'];
+    if (ties > 0) {
+        labels.push('Tied');
+        barData.push(ties);
+        colors.push('#9ca3af');
+    }
+
+    stationsWonChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Stations Won',
+                data: barData,
+                backgroundColor: colors,
+            }],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
+        },
+    });
+}
+
+function renderHighTurnoutChart(data) {
+    if (highTurnoutChart) { highTurnoutChart.destroy(); highTurnoutChart = null; }
+
+    // Count stations with turnout > 60% won by each candidate
+    const wins = data.candidates.map(() => 0);
+    let ties = 0;
+    for (const station of data.per_station) {
+        if (station.turnout === null || station.turnout <= 0.6) continue;
+        const maxVotes = Math.max(...station.votes);
+        if (maxVotes === 0) continue;
+        const winners = station.votes.filter(v => v === maxVotes);
+        if (winners.length > 1) {
+            ties++;
+        } else {
+            wins[station.votes.indexOf(maxVotes)]++;
+        }
+    }
+
+    const ctx = document.getElementById('high-turnout-chart').getContext('2d');
+    const labels = [...data.candidates];
+    const barData = [...wins];
+    const colors = ['#3b82f6', '#ef4444'];
+    if (ties > 0) {
+        labels.push('Tied');
+        barData.push(ties);
+        colors.push('#9ca3af');
+    }
+
+    highTurnoutChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Stations Won (Turnout > 60%)',
+                data: barData,
+                backgroundColor: colors,
+            }],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
+        },
+    });
+}
+
+function renderWinnerScatterChart(data) {
+    if (winnerScatterChart) { winnerScatterChart.destroy(); winnerScatterChart = null; }
+
+    // Build datasets: one per candidate + ties
+    const datasets = data.candidates.map((name, i) => ({
+        label: name,
+        data: [],
+        backgroundColor: i === 0 ? '#06b6d4' : '#ec4899',
+        pointRadius: 7,
+        pointHoverRadius: 9,
+    }));
+    const tieDataset = { label: 'Tied', data: [], backgroundColor: '#9ca3af', pointRadius: 7, pointHoverRadius: 9 };
+
+    for (const station of data.per_station) {
+        if (station.turnout === null) continue;
+        const turnoutPct = Math.round(station.turnout * 100 * 10) / 10; // e.g. 65.3%
+        const maxVotes = Math.max(...station.votes);
+        if (maxVotes === 0) continue;
+
+        const winners = station.votes.filter(v => v === maxVotes);
+        if (winners.length > 1) {
+            tieDataset.data.push({ x: turnoutPct, y: -1, stationName: station.name });
+        } else {
+            const winnerIdx = station.votes.indexOf(maxVotes);
+            // y = 1 for candidate 1 (top), y = 0 for candidate 2 (bottom)
+            datasets[winnerIdx].data.push({ x: turnoutPct, y: winnerIdx === 0 ? 1 : 0, stationName: station.name });
+        }
+    }
+
+    const allDatasets = [...datasets];
+    if (tieDataset.data.length > 0) allDatasets.push(tieDataset);
+
+    const ctx = document.getElementById('winner-scatter-chart').getContext('2d');
+    winnerScatterChart = new Chart(ctx, {
+        type: 'scatter',
+        data: { datasets: allDatasets },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: true, position: 'top' },
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => {
+                            const point = ctx.dataset.data[ctx.dataIndex];
+                            return `${point.stationName} — ${ctx.parsed.x}% turnout`;
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Turnout Percentage (%)' },
+                },
+                y: {
+                    min: -0.5,
+                    max: 1.5,
+                    afterBuildTicks: (axis) => {
+                        axis.ticks = [{ value: 0 }, { value: 1 }];
+                    },
+                    ticks: {
+                        callback: (value) => {
+                            if (value === 1) return data.candidates[0];
+                            if (value === 0) return data.candidates[1];
+                            return '';
+                        },
+                    },
+                    title: { display: false },
+                    grid: { display: false },
+                },
+            },
+        },
+    });
+}
+
+function renderTurnoutByStationChart(data) {
+    if (turnoutByStationChart) { turnoutByStationChart.destroy(); turnoutByStationChart = null; }
+
+    // Sort stations by station number
+    const sorted = [...data.per_station]
+        .map(s => {
+            const numMatch = s.name.match(/(\d+)/);
+            return { ...s, num: numMatch ? parseInt(numMatch[1]) : 0 };
+        })
+        .sort((a, b) => a.num - b.num);
+
+    const labels = sorted.map(s => s.num);
+    const c1Pct = sorted.map(s => s.registered ? (s.votes[0] / s.registered) * 100 : 0);
+    const c2Pct = sorted.map(s => s.registered ? (s.votes[1] / s.registered) * 100 : 0);
+
+    const ctx = document.getElementById('turnout-by-station-chart').getContext('2d');
+    turnoutByStationChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [
+                {
+                    label: data.candidates[0],
+                    data: c1Pct,
+                    backgroundColor: '#06b6d4',
+                },
+                {
+                    label: data.candidates[1],
+                    data: c2Pct,
+                    backgroundColor: '#dc2626',
+                },
+            ],
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: true, position: 'top' },
+                tooltip: {
+                    callbacks: {
+                        title: (items) => `Station ${items[0].label}`,
+                        label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%`,
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Polling Station Number' },
+                },
+                y: {
+                    beginAtZero: true,
+                    title: { display: true, text: 'Turnout Percentage (%)' },
+                },
+            },
+        },
+    });
+}
+
+function switchChartTab(tab) {
+    document.querySelectorAll('.chart-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+    document.getElementById('chart-votes').classList.toggle('hidden', tab !== 'votes');
+    document.getElementById('chart-stations-won').classList.toggle('hidden', tab !== 'stations-won');
+    document.getElementById('chart-high-turnout').classList.toggle('hidden', tab !== 'high-turnout');
+    document.getElementById('chart-winner-scatter').classList.toggle('hidden', tab !== 'winner-scatter');
+    document.getElementById('chart-turnout-by-station').classList.toggle('hidden', tab !== 'turnout-by-station');
+
+    const titleBase = chartData ? chartData.pdf_name : '';
+    if (tab === 'votes') {
+        document.getElementById('chart-title').textContent = `Vote Totals — ${titleBase}`;
+        renderVoteTotalsChart(chartData);
+    } else if (tab === 'stations-won') {
+        document.getElementById('chart-title').textContent = `Stations Won — ${titleBase}`;
+        renderStationsWonChart(chartData);
+    } else if (tab === 'high-turnout') {
+        document.getElementById('chart-title').textContent = `High Turnout Stations Won — ${titleBase}`;
+        renderHighTurnoutChart(chartData);
+    } else if (tab === 'winner-scatter') {
+        document.getElementById('chart-title').textContent = `Winner by Station — ${titleBase}`;
+        renderWinnerScatterChart(chartData);
+    } else if (tab === 'turnout-by-station') {
+        document.getElementById('chart-title').textContent = `Turnout by Station — ${titleBase}`;
+        renderTurnoutByStationChart(chartData);
+    }
+}
 
 async function openCharts(sessionId) {
     try {
@@ -1138,41 +1428,20 @@ async function openCharts(sessionId) {
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail);
 
+        chartData = data;
+        destroyCharts();
         showStep('chart');
-        document.getElementById('chart-title').textContent = `Vote Totals — ${data.pdf_name}`;
 
-        // Destroy previous chart if exists
-        if (voteChart) {
-            voteChart.destroy();
-            voteChart = null;
-        }
-
-        const ctx = document.getElementById('vote-chart').getContext('2d');
-        voteChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: data.candidates,
-                datasets: [{
-                    label: 'Total Votes',
-                    data: data.totals,
-                    backgroundColor: ['#3b82f6', '#ef4444'],
-                }],
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: { display: false },
-                },
-                scales: {
-                    y: { beginAtZero: true },
-                },
-            },
-        });
+        // Reset to votes tab
+        switchChartTab('votes');
     } catch (err) {
         alert(`Error: ${err.message}`);
     }
 }
 
+document.querySelectorAll('.chart-tab').forEach(tab => {
+    tab.addEventListener('click', () => switchChartTab(tab.dataset.tab));
+});
 document.getElementById('chart-back-btn').addEventListener('click', goToDashboard);
 
 // --- Completion ---

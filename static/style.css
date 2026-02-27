@@ -256,6 +256,25 @@ input[type="text"] {
     width: 80px;
 }
 
+.province-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.province-row label {
+    font-weight: 500;
+    min-width: 90px;
+}
+
+.province-row select {
+    padding: 8px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
 /* Process Section */
 #process-pdf-name {
     font-weight: 400;
@@ -671,6 +690,37 @@ input[type="text"] {
 }
 
 /* Chart Section */
+.chart-tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #e5e7eb;
+}
+
+.chart-tab {
+    background: transparent;
+    color: #6b7280;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 8px 20px;
+    margin-bottom: -2px;
+    font-size: 14px;
+    cursor: pointer;
+    border-radius: 0;
+}
+
+.chart-tab:hover {
+    color: #374151;
+    background: transparent;
+}
+
+.chart-tab.active {
+    color: #2563eb;
+    border-bottom-color: #2563eb;
+    font-weight: 500;
+    background: transparent;
+}
+
 #chart-container {
     max-width: 700px;
     margin: 20px auto;
