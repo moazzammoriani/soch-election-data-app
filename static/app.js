@@ -317,6 +317,7 @@ async function restoreSession() {
         }
         document.getElementById('province-select').value = session.province || '';
         document.getElementById('seat-type-select').value = session.seat_type || '';
+        comparisonSource = session.comparison_source || null;
 
         // Show appropriate step
         showStep(session.step);
@@ -325,6 +326,7 @@ async function restoreSession() {
             await loadPollingStations();
             renderPageThumbnails();
             updateProgress();
+            updateComparisonStatus();
         }
 
         if (session.pdf_name) {
@@ -568,10 +570,16 @@ function renderQueueItem(ps, type) {
             </div>
         `;
     } else {
+        const sourceTag = ps.source && ps.source !== 'ecp'
+            ? `<span class="source-tag">${ps.source}</span>`
+            : '';
+        const pagesText = ps.pages && ps.pages.length > 0
+            ? `<div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>`
+            : '';
         return `
             <div class="queue-item${flaggedClass}" data-id="${ps.id}">
-                <div class="queue-item-header">${nameHtml}</div>
-                <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
+                <div class="queue-item-header">${nameHtml}${sourceTag}</div>
+                ${pagesText}
                 ${flagsHtml}
                 <div class="queue-item-actions">
                     <button class="view-btn" data-id="${ps.id}">View</button>
@@ -957,6 +965,70 @@ bulkApproveBtn.addEventListener('click', async () => {
 
 exportCsvBtn.addEventListener('click', () => {
     window.location.href = '/api/polling-stations/export';
+});
+
+// --- Comparison Upload ---
+
+let comparisonSource = null;
+
+function updateComparisonStatus() {
+    const statusDiv = document.getElementById('comparison-status');
+    if (comparisonSource) {
+        const comparisonStations = [...pollingStations.approved].filter(ps => ps.source === comparisonSource);
+        statusDiv.innerHTML = `<p class="comparison-info">Comparison: <strong>${comparisonSource}</strong> (${comparisonStations.length} stations)</p>`;
+    } else {
+        statusDiv.innerHTML = '';
+    }
+}
+
+document.getElementById('comparison-upload-btn').addEventListener('click', async () => {
+    const sourceInput = document.getElementById('comparison-source-name');
+    const fileInput = document.getElementById('comparison-file-input');
+    const sourceName = sourceInput.value.trim();
+
+    if (!sourceName) {
+        alert('Please enter a source name');
+        return;
+    }
+    if (!fileInput.files.length) {
+        alert('Please select a CSV file');
+        return;
+    }
+
+    const sessionRes = await fetch('/api/session');
+    const sessionData = await sessionRes.json();
+    if (!sessionData.session) {
+        alert('No active session');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    formData.append('source_name', sourceName);
+
+    const btn = document.getElementById('comparison-upload-btn');
+    btn.disabled = true;
+    btn.textContent = 'Uploading...';
+
+    try {
+        const res = await fetch(`/api/sessions/${sessionData.session.id}/comparison-upload`, {
+            method: 'POST',
+            body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+
+        comparisonSource = data.source_name;
+        updateComparisonStatus();
+        await loadPollingStations();
+        fileInput.value = '';
+        alert(`Uploaded ${data.stations_inserted} stations from ${data.source_name}`);
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Upload Comparison';
+    }
 });
 
 // --- Delete Polling Station ---

@@ -807,3 +807,34 @@ input[type="text"] {
 .chart-btn:hover {
     background: #7c3aed;
 }
+
+/* Comparison upload */
+.comparison-upload-form {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 8px;
+}
+
+.comparison-upload-form input[type="text"] {
+    padding: 6px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    width: 150px;
+}
+
+.comparison-info {
+    margin: 4px 0;
+    color: #555;
+}
+
+.source-tag {
+    display: inline-block;
+    background: #e0e7ff;
+    color: #3730a3;
+    font-size: 0.75em;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-left: 6px;
+    vertical-align: middle;
+}

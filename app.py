@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 import cv2
 import numpy as np
 import fitz
-from fastapi import FastAPI, UploadFile, HTTPException, Cookie, Response as FastAPIResponse
+from fastapi import FastAPI, UploadFile, HTTPException, Cookie, Response as FastAPIResponse, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, ConfigDict, create_model
@@ -127,6 +127,14 @@ def init_db():
         conn.execute("ALTER TABLE sessions ADD COLUMN seat_type TEXT")
     except sqlite3.OperationalError:
         pass
+    try:
+        conn.execute("ALTER TABLE sessions ADD COLUMN comparison_source TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE polling_station_queue ADD COLUMN source TEXT DEFAULT 'ecp'")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -152,6 +160,7 @@ def get_session(session_id: str) -> Optional[dict]:
             "pending_form_data": json.loads(row["pending_form_data"]) if row["pending_form_data"] else None,
             "province": row["province"],
             "seat_type": row["seat_type"],
+            "comparison_source": row["comparison_source"],
         }
     return None
 
@@ -395,7 +404,7 @@ async def get_chart_data(target_session_id: str):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT name, form_data FROM polling_station_queue WHERE session_id = ? AND status = 'approved' ORDER BY id ASC",
+        "SELECT name, form_data FROM polling_station_queue WHERE session_id = ? AND status = 'approved' AND source = 'ecp' ORDER BY id ASC",
         (target_session_id,)
     ).fetchall()
     conn.close()
@@ -450,6 +459,7 @@ async def get_session_state(session_id: Optional[str] = Cookie(default=None)):
             "pending_form_data": session["pending_form_data"],
             "province": session["province"],
             "seat_type": session["seat_type"],
+            "comparison_source": session["comparison_source"],
         }
     }
 
@@ -862,6 +872,7 @@ async def list_polling_stations(session_id: Optional[str] = Cookie(default=None)
             "name": r["name"],
             "pages": json.loads(r["pages"]),
             "status": r["status"],
+            "source": r["source"] if "source" in r.keys() else "ecp",
             "form_data": form_data,
             "flags": flags,
         }
@@ -1069,7 +1080,7 @@ async def delete_all_by_status(status: str, session_id: Optional[str] = Cookie(d
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, pages FROM polling_station_queue WHERE session_id = ? AND status = ?",
+        "SELECT id, pages FROM polling_station_queue WHERE session_id = ? AND status = ? AND source = 'ecp'",
         (session_id, status)
     ).fetchall()
 
@@ -1088,7 +1099,7 @@ async def delete_all_by_status(status: str, session_id: Optional[str] = Cookie(d
         update_session(session_id, processed_pages=list(processed))
 
     conn.execute(
-        "DELETE FROM polling_station_queue WHERE session_id = ? AND status = ?",
+        "DELETE FROM polling_station_queue WHERE session_id = ? AND status = ? AND source = 'ecp'",
         (session_id, status)
     )
     conn.commit()
@@ -1418,7 +1429,7 @@ async def export_polling_stations_csv(session_id: Optional[str] = Cookie(default
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT * FROM polling_station_queue WHERE session_id = ? AND status = 'approved' ORDER BY id ASC",
+        "SELECT * FROM polling_station_queue WHERE session_id = ? AND status = 'approved' AND source = 'ecp' ORDER BY id ASC",
         (session_id,)
     ).fetchall()
     conn.close()
@@ -1478,6 +1489,87 @@ async def export_polling_stations_csv(session_id: Optional[str] = Cookie(default
             "Content-Disposition": "attachment; filename=polling_stations.csv"
         }
     )
+
+
+@app.post("/api/sessions/{target_session_id}/comparison-upload")
+async def upload_comparison_csv(target_session_id: str, file: UploadFile, source_name: str = Form(...)):
+    """Upload a third-party CSV for comparison with ECP data."""
+    session = get_session(target_session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    if not source_name or not source_name.strip():
+        raise HTTPException(400, "Source name is required")
+    source_name = source_name.strip()
+
+    # Read and parse CSV
+    import csv
+    import io
+
+    content = await file.read()
+    text = content.decode("utf-8")
+    reader = csv.DictReader(io.StringIO(text))
+
+    # Delete any existing comparison rows for this session+source
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "DELETE FROM polling_station_queue WHERE session_id = ? AND source = ?",
+        (target_session_id, source_name)
+    )
+
+    # Parse CSV rows and insert
+    inserted = 0
+    for row in reader:
+        name = row.get("name", "").strip()
+        if not name:
+            continue
+
+        # Reconstruct form_data from _type/_value column pairs
+        form_data = {}
+        seen_fields = set()
+        for col_name in row:
+            if col_name.endswith("_type"):
+                field = col_name[:-5]  # strip "_type"
+                seen_fields.add(field)
+            elif col_name.endswith("_value"):
+                field = col_name[:-6]  # strip "_value"
+                seen_fields.add(field)
+
+        for field in seen_fields:
+            type_val = row.get(f"{field}_type", "").strip()
+            value_str = row.get(f"{field}_value", "").strip()
+            if not type_val and not value_str:
+                continue
+            entry = {}
+            if type_val:
+                entry["type"] = type_val
+            if value_str:
+                try:
+                    entry["value"] = int(value_str)
+                except ValueError:
+                    try:
+                        entry["value"] = float(value_str)
+                    except ValueError:
+                        entry["value"] = value_str
+            else:
+                entry["value"] = None
+            form_data[field] = entry
+
+        conn.execute(
+            "INSERT INTO polling_station_queue (session_id, name, pages, status, form_data, source) VALUES (?, ?, ?, 'approved', ?, ?)",
+            (target_session_id, name, "[]", json.dumps(form_data), source_name)
+        )
+        inserted += 1
+
+    # Update session comparison_source
+    conn.execute(
+        "UPDATE sessions SET comparison_source = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (source_name, target_session_id)
+    )
+    conn.commit()
+    conn.close()
+
+    return {"status": "ok", "source_name": source_name, "stations_inserted": inserted}
 
 
 # --- Static files ---
