@@ -808,6 +808,18 @@ input[type="text"] {
     background: #7c3aed;
 }
 
+/* Chart source toggle */
+.chart-source-toggle {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 12px;
+}
+
+.chart-source-toggle label {
+    cursor: pointer;
+    font-size: 0.95em;
+}
+
 /* Comparison upload */
 .comparison-upload-form {
     display: flex;

@@ -187,8 +187,20 @@
                 <button class="chart-tab" data-tab="turnout-by-station">Turnout by Station</button>
             </div>
             <div id="chart-container">
-                <div id="chart-votes"><canvas id="vote-chart"></canvas></div>
-                <div id="chart-stations-won" class="hidden"><canvas id="stations-won-chart"></canvas></div>
+                <div id="chart-votes">
+                    <div id="chart-source-toggle-votes" class="chart-source-toggle hidden">
+                        <label><input type="radio" name="chart-source-votes" value="ecp" checked> ECP</label>
+                        <label><input type="radio" name="chart-source-votes" value="comparison"> <span class="chart-source-label">Comparison</span></label>
+                    </div>
+                    <canvas id="vote-chart"></canvas>
+                </div>
+                <div id="chart-stations-won" class="hidden">
+                    <div id="chart-source-toggle-stations-won" class="chart-source-toggle hidden">
+                        <label><input type="radio" name="chart-source-stations-won" value="ecp" checked> ECP</label>
+                        <label><input type="radio" name="chart-source-stations-won" value="comparison"> <span class="chart-source-label">Comparison</span></label>
+                    </div>
+                    <canvas id="stations-won-chart"></canvas>
+                </div>
                 <div id="chart-high-turnout" class="hidden"><canvas id="high-turnout-chart"></canvas></div>
                 <div id="chart-winner-scatter" class="hidden"><canvas id="winner-scatter-chart"></canvas></div>
                 <div id="chart-turnout-by-station" class="hidden"><canvas id="turnout-by-station-chart"></canvas></div>

@@ -387,7 +387,7 @@ async def delete_session_endpoint(target_session_id: str, response: FastAPIRespo
 
 
 @app.get("/api/sessions/{target_session_id}/chart-data")
-async def get_chart_data(target_session_id: str):
+async def get_chart_data(target_session_id: str, source: str = "ecp"):
     """Get aggregated vote data for charts."""
     session = get_session(target_session_id)
     if not session:
@@ -404,8 +404,8 @@ async def get_chart_data(target_session_id: str):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT name, form_data FROM polling_station_queue WHERE session_id = ? AND status = 'approved' AND source = 'ecp' ORDER BY id ASC",
-        (target_session_id,)
+        "SELECT name, form_data FROM polling_station_queue WHERE session_id = ? AND status = 'approved' AND source = ? ORDER BY id ASC",
+        (target_session_id, source)
     ).fetchall()
     conn.close()
 
@@ -430,6 +430,8 @@ async def get_chart_data(target_session_id: str):
         "candidates": [c1_name, c2_name],
         "totals": [c1_total, c2_total],
         "per_station": per_station,
+        "source": source,
+        "comparison_source": session["comparison_source"],
     }
 
 

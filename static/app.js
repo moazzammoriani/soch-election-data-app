@@ -1275,6 +1275,7 @@ let highTurnoutChart = null;
 let winnerScatterChart = null;
 let turnoutByStationChart = null;
 let chartData = null;
+let chartSessionId = null;
 
 function destroyCharts() {
     if (voteChart) { voteChart.destroy(); voteChart = null; }
@@ -1554,9 +1555,10 @@ function switchChartTab(tab) {
     }
 }
 
-async function openCharts(sessionId) {
+async function openCharts(sessionId, source = 'ecp', tab = null) {
     try {
-        const res = await fetch(`/api/sessions/${sessionId}/chart-data`);
+        chartSessionId = sessionId;
+        const res = await fetch(`/api/sessions/${sessionId}/chart-data?source=${encodeURIComponent(source)}`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail);
 
@@ -1564,8 +1566,27 @@ async function openCharts(sessionId) {
         destroyCharts();
         showStep('chart');
 
-        // Reset to votes tab
-        switchChartTab('votes');
+        // Show/hide source toggles
+        const toggleIds = ['chart-source-toggle-votes', 'chart-source-toggle-stations-won'];
+        const radioNames = ['chart-source-votes', 'chart-source-stations-won'];
+        if (data.comparison_source) {
+            document.querySelectorAll('.chart-source-label').forEach(el => {
+                el.textContent = data.comparison_source;
+            });
+            toggleIds.forEach(id => document.getElementById(id).classList.remove('hidden'));
+            radioNames.forEach(name => {
+                document.querySelectorAll(`input[name="${name}"]`).forEach(r => {
+                    if (r.value === 'ecp') r.checked = (source === 'ecp');
+                    else r.checked = (source !== 'ecp');
+                });
+            });
+        } else {
+            toggleIds.forEach(id => document.getElementById(id).classList.add('hidden'));
+        }
+
+        // Use provided tab or default to votes
+        const activeTab = tab || document.querySelector('.chart-tab.active')?.dataset.tab || 'votes';
+        switchChartTab(activeTab);
     } catch (err) {
         alert(`Error: ${err.message}`);
     }
@@ -1575,6 +1596,17 @@ document.querySelectorAll('.chart-tab').forEach(tab => {
     tab.addEventListener('click', () => switchChartTab(tab.dataset.tab));
 });
 document.getElementById('chart-back-btn').addEventListener('click', goToDashboard);
+
+['chart-source-votes', 'chart-source-stations-won'].forEach(name => {
+    document.querySelectorAll(`input[name="${name}"]`).forEach(radio => {
+        radio.addEventListener('change', () => {
+            if (!chartSessionId) return;
+            const source = radio.value === 'ecp' ? 'ecp' : chartData.comparison_source;
+            const currentTab = document.querySelector('.chart-tab.active')?.dataset.tab || 'votes';
+            openCharts(chartSessionId, source, currentTab);
+        });
+    });
+});
 
 // --- Completion ---
 
