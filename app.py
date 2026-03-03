@@ -225,8 +225,88 @@ class RateLimiter:
 gemini_rate_limiter = RateLimiter(max_per_second=15)
 
 
+def make_strict_schema(pydantic_model) -> dict:
+    """Convert a Pydantic model's JSON schema to OpenAI strict-mode compatible format.
+
+    Strict mode requires: all properties in 'required', 'additionalProperties: false'
+    on every object, and no 'anyOf' for nullable types (use 'type': ['integer', 'null'] instead).
+    """
+    schema = pydantic_model.model_json_schema()
+
+    def transform(obj):
+        if not isinstance(obj, dict):
+            return obj
+
+        # Resolve $ref
+        if "$ref" in obj:
+            ref_path = obj["$ref"].replace("#/$defs/", "")
+            if "$defs" in schema and ref_path in schema["$defs"]:
+                resolved = schema["$defs"][ref_path].copy()
+                return transform(resolved)
+            return obj
+
+        # Convert anyOf [{"type": "X"}, {"type": "null"}] to {"type": "X", "nullable": true}
+        # Gemini's native schema format uses "nullable" rather than anyOf or type arrays
+        if "anyOf" in obj:
+            non_null_types = []
+            has_null = False
+            for option in obj["anyOf"]:
+                if option.get("type") == "null":
+                    has_null = True
+                elif "$ref" in option:
+                    resolved = transform(option)
+                    result = {k: v for k, v in obj.items() if k != "anyOf"}
+                    result.update(resolved)
+                    if has_null:
+                        result["nullable"] = True
+                    return transform(result)
+                else:
+                    non_null_types.append(option)
+            if non_null_types:
+                result = {k: v for k, v in obj.items() if k != "anyOf"}
+                result.update(non_null_types[0])
+                if has_null:
+                    result["nullable"] = True
+                return transform(result)
+
+        # For object types: enforce additionalProperties and required
+        if obj.get("type") == "object" and "properties" in obj:
+            obj["additionalProperties"] = False
+            obj["required"] = list(obj["properties"].keys())
+            obj["properties"] = {k: transform(v) for k, v in obj["properties"].items()}
+
+        # Recurse into all dict values
+        for key in list(obj.keys()):
+            if isinstance(obj[key], dict):
+                obj[key] = transform(obj[key])
+            elif isinstance(obj[key], list):
+                obj[key] = [transform(item) if isinstance(item, dict) else item for item in obj[key]]
+
+        return obj
+
+    schema = transform(schema)
+    # Remove top-level $defs since we've inlined everything
+    schema.pop("$defs", None)
+    # Remove title fields (not needed for strict mode)
+    def strip_titles(obj):
+        if isinstance(obj, dict):
+            obj.pop("title", None)
+            obj.pop("default", None)
+            for v in obj.values():
+                strip_titles(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                strip_titles(item)
+    strip_titles(schema)
+    schema["additionalProperties"] = False
+    schema["required"] = list(schema.get("properties", {}).keys())
+    return schema
+
+
 async def call_gemini_with_retry(content_parts, response_schema, schema_name: str = "FormData", max_retries: int = 3):
     """Call Gemini API via OpenRouter with retry logic for rate limit errors."""
+    strict_schema = make_strict_schema(response_schema)
+
     for attempt in range(max_retries):
         await gemini_rate_limiter.acquire()
         try:
@@ -238,7 +318,8 @@ async def call_gemini_with_retry(content_parts, response_schema, schema_name: st
                     "type": "json_schema",
                     "json_schema": {
                         "name": schema_name,
-                        "schema": response_schema.model_json_schema(),
+                        "strict": True,
+                        "schema": strict_schema,
                     },
                 },
             )
