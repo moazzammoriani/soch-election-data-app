@@ -14,7 +14,9 @@ from fastapi import FastAPI, UploadFile, HTTPException, Cookie, Response as Fast
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, ConfigDict, create_model
-from google import genai
+import base64
+import os
+from openai import OpenAI, RateLimitError
 from enum import Enum
 
 
@@ -223,36 +225,38 @@ class RateLimiter:
 gemini_rate_limiter = RateLimiter(max_per_second=15)
 
 
-async def call_gemini_with_retry(contents, response_schema, max_retries: int = 3):
-    """Call Gemini API with retry logic for rate limit errors."""
-    from google.genai.errors import ClientError
-
+async def call_gemini_with_retry(content_parts, response_schema, schema_name: str = "FormData", max_retries: int = 3):
+    """Call Gemini API via OpenRouter with retry logic for rate limit errors."""
     for attempt in range(max_retries):
         await gemini_rate_limiter.acquire()
         try:
             response = await asyncio.to_thread(
-                gemini_client.models.generate_content,
-                model="gemini-3-flash-preview",
-                contents=contents,
-                config=genai.types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=response_schema,
-                    thinking_config=genai.types.ThinkingConfig(thinking_level="low"),
-                ),
+                openrouter_client.chat.completions.create,
+                model="google/gemini-3-flash-preview",
+                messages=[{"role": "user", "content": content_parts}],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "schema": response_schema.model_json_schema(),
+                    },
+                },
             )
             return response
-        except ClientError as e:
-            if e.status_code == 429 and attempt < max_retries - 1:
-                # Extract retry delay from error if available, otherwise use exponential backoff
+        except RateLimitError:
+            if attempt < max_retries - 1:
                 retry_delay = 30 * (2 ** attempt)  # 30s, 60s, 120s
                 await asyncio.sleep(retry_delay)
             else:
                 raise
 
 
-# --- Gemini client (singleton) ---
+# --- OpenRouter client (singleton) ---
 
-gemini_client = genai.Client()
+openrouter_client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+)
 
 
 # --- App setup ---
@@ -753,17 +757,15 @@ For each field, determine if the value is:
 Extract the data according to the field names in the schema."""
 
     # Build content with images
-    contents = [prompt]
+    content_parts = [{"type": "text", "text": prompt}]
     for img_bytes in images:
-        contents.append(
-            genai.types.Part.from_bytes(data=img_bytes, mime_type="image/png")
-        )
+        content_parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(img_bytes).decode()}"}})
 
     # Call Gemini with rate limiting and retry
-    response = await call_gemini_with_retry(contents, DynamicForm)
+    response = await call_gemini_with_retry(content_parts, DynamicForm)
 
     # Parse and return
-    result = DynamicForm.model_validate_json(response.text)
+    result = DynamicForm.model_validate_json(response.choices[0].message.content)
     form_data = result.model_dump()
 
     # Save pending data to session so it can be restored
@@ -1227,17 +1229,15 @@ For each field, determine if the value is:
 Extract the data according to the field names in the schema."""
 
     # Build content with images
-    contents = [prompt]
+    content_parts = [{"type": "text", "text": prompt}]
     for img_bytes in images:
-        contents.append(
-            genai.types.Part.from_bytes(data=img_bytes, mime_type="image/png")
-        )
+        content_parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(img_bytes).decode()}"}})
 
     # Call Gemini with rate limiting and retry
-    response = await call_gemini_with_retry(contents, DynamicForm)
+    response = await call_gemini_with_retry(content_parts, DynamicForm)
 
     # Parse result
-    result = DynamicForm.model_validate_json(response.text)
+    result = DynamicForm.model_validate_json(response.choices[0].message.content)
     form_data = result.model_dump()
 
     # Store skew angles as metadata
