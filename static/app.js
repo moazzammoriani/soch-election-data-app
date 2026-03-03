@@ -975,9 +975,30 @@ function updateComparisonStatus() {
     const statusDiv = document.getElementById('comparison-status');
     if (comparisonSource) {
         const comparisonStations = [...pollingStations.approved].filter(ps => ps.source === comparisonSource);
-        statusDiv.innerHTML = `<p class="comparison-info">Comparison: <strong>${comparisonSource}</strong> (${comparisonStations.length} stations)</p>`;
+        statusDiv.innerHTML = `<p class="comparison-info">Comparison: <strong>${comparisonSource}</strong> (${comparisonStations.length} stations) <button class="danger remove-comparison-btn">Remove</button></p>`;
+        statusDiv.querySelector('.remove-comparison-btn').addEventListener('click', removeComparison);
     } else {
         statusDiv.innerHTML = '';
+    }
+}
+
+async function removeComparison() {
+    if (!confirm(`Remove all ${comparisonSource} comparison data?`)) return;
+
+    const sessionRes = await fetch('/api/session');
+    const sessionData = await sessionRes.json();
+    if (!sessionData.session) return;
+
+    try {
+        const res = await fetch(`/api/sessions/${sessionData.session.id}/comparison`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+
+        comparisonSource = null;
+        updateComparisonStatus();
+        await loadPollingStations();
+    } catch (err) {
+        alert(`Error: ${err.message}`);
     }
 }
 

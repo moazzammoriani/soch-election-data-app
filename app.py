@@ -1493,6 +1493,31 @@ async def export_polling_stations_csv(session_id: Optional[str] = Cookie(default
     )
 
 
+@app.delete("/api/sessions/{target_session_id}/comparison")
+async def delete_comparison_data(target_session_id: str):
+    """Delete all comparison (non-ECP) data for a session."""
+    session = get_session(target_session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    if not session["comparison_source"]:
+        raise HTTPException(400, "No comparison data to delete")
+
+    conn = sqlite3.connect(DB_PATH)
+    deleted = conn.execute(
+        "DELETE FROM polling_station_queue WHERE session_id = ? AND source = ?",
+        (target_session_id, session["comparison_source"])
+    ).rowcount
+    conn.execute(
+        "UPDATE sessions SET comparison_source = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (target_session_id,)
+    )
+    conn.commit()
+    conn.close()
+
+    return {"status": "ok", "deleted": deleted}
+
+
 @app.post("/api/sessions/{target_session_id}/comparison-upload")
 async def upload_comparison_csv(target_session_id: str, file: UploadFile, source_name: str = Form(...)):
     """Upload a third-party CSV for comparison with ECP data."""
