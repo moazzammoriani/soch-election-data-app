@@ -304,6 +304,7 @@ async function restoreSession() {
 
         const session = data.session;
         pageCount = session.page_count;
+        document.getElementById('auto-end-page').value = pageCount;
         schemaFields = session.schema_fields;
 
         // Restore candidate inputs if available
@@ -436,6 +437,7 @@ uploadBtn.addEventListener('click', async () => {
         });
 
         pageCount = data.page_count;
+        document.getElementById('auto-end-page').value = pageCount;
         selectedPages.clear();
         uploadStatus.textContent = `Uploaded: ${data.filename} (${pageCount} pages)`;
         document.getElementById('schema-pdf-name').textContent = `${data.filename} (${pageCount} pages)`;
@@ -839,14 +841,22 @@ document.getElementById('auto-create-btn').addEventListener('click', async () =>
         return;
     }
 
-    // Collect unused pages, sorted ascending
+    const startPage = parseInt(document.getElementById('auto-start-page').value) || 1;
+    const endPage = parseInt(document.getElementById('auto-end-page').value) || pageCount;
+
+    if (startPage < 1 || endPage > pageCount || startPage > endPage) {
+        alert(`Invalid range. Pages must be between 1 and ${pageCount}.`);
+        return;
+    }
+
+    // Collect unused pages within range (UI is 1-based, internal is 0-based)
     const unusedPages = [];
-    for (let i = 0; i < pageCount; i++) {
+    for (let i = startPage - 1; i < endPage; i++) {
         if (!usedPages.has(i)) unusedPages.push(i);
     }
 
     if (unusedPages.length === 0) {
-        alert('No unused pages remaining');
+        alert('No unused pages in the specified range');
         return;
     }
 

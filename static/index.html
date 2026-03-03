@@ -143,7 +143,11 @@
                 <div id="auto-create-section">
                     <label for="pages-per-station">Pages per station:</label>
                     <input type="number" id="pages-per-station" min="1" max="10" value="1">
-                    <button id="auto-create-btn">Automatically Create All Polling Stations</button>
+                    <label for="auto-start-page">From page:</label>
+                    <input type="number" id="auto-start-page" min="1" value="1">
+                    <label for="auto-end-page">To page:</label>
+                    <input type="number" id="auto-end-page" min="1">
+                    <button id="auto-create-btn">Auto-Create Polling Stations</button>
                 </div>
                 <button id="toggle-thumbnails-btn">Show Thumbnails</button>
                 <div id="page-thumbnails" class="hidden"></div>

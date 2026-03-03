@@ -750,8 +750,10 @@ input[type="text"] {
     margin-top: 10px;
 }
 
-#pages-per-station {
-    width: 60px;
+#pages-per-station,
+#auto-start-page,
+#auto-end-page {
+    width: 80px;
 }
 
 #toggle-thumbnails-btn {
