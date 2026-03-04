@@ -17,6 +17,7 @@
                     <button id="new-session-btn">+ New Session</button>
                     <button id="bulk-upload-btn">Bulk Upload</button>
                     <input type="file" id="bulk-upload-input" accept=".pdf" multiple class="hidden">
+                    <button id="ai-settings-btn" title="AI Provider Settings">&#9881;</button>
                 </div>
             </div>
             <div class="sort-controls">
@@ -218,6 +219,24 @@
             <p>All pages have been processed.</p>
             <button id="view-results-btn">View Results</button>
         </section>
+    </div>
+
+    <!-- AI Settings Modal -->
+    <div id="ai-settings-modal" class="modal hidden">
+        <div class="modal-content ai-settings-content">
+            <h3>AI Provider Settings</h3>
+            <label for="ai-provider-select">Provider</label>
+            <select id="ai-provider-select">
+                <option value="openrouter">OpenRouter</option>
+                <option value="gemini">Gemini Direct</option>
+            </select>
+            <label for="ai-model-input">Model</label>
+            <input type="text" id="ai-model-input" placeholder="e.g. google/gemini-3-flash-preview">
+            <div class="modal-actions">
+                <button id="ai-settings-save">Save</button>
+                <button id="ai-settings-cancel" class="secondary">Cancel</button>
+            </div>
+        </div>
     </div>
 
     <script src="/static/app.js"></script>

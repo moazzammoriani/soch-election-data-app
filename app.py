@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field, ConfigDict, create_model
 import base64
 import os
 from openai import OpenAI, RateLimitError
+from google import genai
+from google.genai.errors import ClientError as GeminiClientError
 from enum import Enum
 
 
@@ -303,41 +305,82 @@ def make_strict_schema(pydantic_model) -> dict:
     return schema
 
 
-async def call_gemini_with_retry(content_parts, response_schema, schema_name: str = "FormData", max_retries: int = 3):
-    """Call Gemini API via OpenRouter with retry logic for rate limit errors."""
-    strict_schema = make_strict_schema(response_schema)
+class _GeminiResponse:
+    """Wraps Gemini SDK response to match OpenAI response shape."""
+    def __init__(self, text):
+        self.choices = [type('C', (), {'message': type('M', (), {'content': text})()})]
+
+
+_client_cache = {}
+
+def get_client(provider):
+    if provider not in _client_cache:
+        if provider == "gemini":
+            _client_cache[provider] = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY", ""))
+        else:
+            _client_cache[provider] = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+            )
+    return _client_cache[provider]
+
+
+async def call_gemini_with_retry(content_parts, response_schema, schema_name: str = "FormData",
+                                  provider: str = "openrouter", model: str = "google/gemini-3-flash-preview",
+                                  max_retries: int = 3):
+    """Call Gemini API with retry logic for rate limit errors. Supports both direct Gemini and OpenRouter."""
+    client = get_client(provider)
 
     for attempt in range(max_retries):
         await gemini_rate_limiter.acquire()
         try:
-            response = await asyncio.to_thread(
-                openrouter_client.chat.completions.create,
-                model="google/gemini-3-flash-preview",
-                messages=[{"role": "user", "content": content_parts}],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": schema_name,
-                        "strict": True,
-                        "schema": strict_schema,
+            if provider == "gemini":
+                # Convert OpenAI-format content_parts to genai format
+                contents = []
+                for part in content_parts:
+                    if part["type"] == "text":
+                        contents.append(part["text"])
+                    elif part["type"] == "image_url":
+                        b64_data = part["image_url"]["url"].split(",", 1)[1]
+                        contents.append(genai.types.Part.from_bytes(
+                            data=base64.b64decode(b64_data), mime_type="image/png"))
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=model,
+                    contents=contents,
+                    config=genai.types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=response_schema,
+                        thinking_config=genai.types.ThinkingConfig(thinking_level="low"),
+                    ),
+                )
+                return _GeminiResponse(response.text)
+            else:
+                strict_schema = make_strict_schema(response_schema)
+                response = await asyncio.to_thread(
+                    client.chat.completions.create,
+                    model=model,
+                    messages=[{"role": "user", "content": content_parts}],
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": schema_name,
+                            "strict": True,
+                            "schema": strict_schema,
+                        },
                     },
-                },
-            )
-            return response
+                )
+                return response
         except RateLimitError:
             if attempt < max_retries - 1:
-                retry_delay = 30 * (2 ** attempt)  # 30s, 60s, 120s
-                await asyncio.sleep(retry_delay)
+                await asyncio.sleep(30 * (2 ** attempt))
             else:
                 raise
-
-
-# --- OpenRouter client (singleton) ---
-
-openrouter_client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.environ.get("OPENROUTER_API_KEY", ""),
-)
+        except GeminiClientError as e:
+            if e.status_code == 429 and attempt < max_retries - 1:
+                await asyncio.sleep(30 * (2 ** attempt))
+            else:
+                raise
 
 
 # --- App setup ---
@@ -367,6 +410,8 @@ class SchemaDefinition(BaseModel):
 
 class ProcessRequest(BaseModel):
     pages: list[int]
+    provider: str = "openrouter"
+    model: str = "google/gemini-3-flash-preview"
 
 
 class ApproveRequest(BaseModel):
@@ -380,6 +425,11 @@ class CreatePollingStationRequest(BaseModel):
 
 class BatchCreatePollingStationsRequest(BaseModel):
     page_groups: list[list[int]]
+
+
+class AIProviderRequest(BaseModel):
+    provider: str = "openrouter"
+    model: str = "google/gemini-3-flash-preview"
 
 
 class ApprovePollingStationRequest(BaseModel):
@@ -843,7 +893,7 @@ Extract the data according to the field names in the schema."""
         content_parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(img_bytes).decode()}"}})
 
     # Call Gemini with rate limiting and retry
-    response = await call_gemini_with_retry(content_parts, DynamicForm)
+    response = await call_gemini_with_retry(content_parts, DynamicForm, provider=req.provider, model=req.model)
 
     # Parse and return
     result = DynamicForm.model_validate_json(response.choices[0].message.content)
@@ -1237,7 +1287,7 @@ async def rename_polling_station(station_id: int, req: RenamePollingStationReque
     return {"status": "ok", "name": new_name}
 
 
-async def process_single_station(session_id: str, station_id: int) -> dict:
+async def process_single_station(session_id: str, station_id: int, provider: str = "openrouter", model: str = "google/gemini-3-flash-preview") -> dict:
     """Process a single polling station with Gemini. Returns the form data."""
     session = get_session(session_id)
     if not session or not session["pdf_path"]:
@@ -1315,7 +1365,7 @@ Extract the data according to the field names in the schema."""
         content_parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(img_bytes).decode()}"}})
 
     # Call Gemini with rate limiting and retry
-    response = await call_gemini_with_retry(content_parts, DynamicForm)
+    response = await call_gemini_with_retry(content_parts, DynamicForm, provider=provider, model=model)
 
     # Parse result
     result = DynamicForm.model_validate_json(response.choices[0].message.content)
@@ -1343,16 +1393,16 @@ Extract the data according to the field names in the schema."""
 
 
 @app.post("/api/polling-station/{station_id}/process")
-async def process_polling_station(station_id: int, session_id: Optional[str] = Cookie(default=None)):
+async def process_polling_station(station_id: int, req: AIProviderRequest = AIProviderRequest(), session_id: Optional[str] = Cookie(default=None)):
     """Process a single polling station with Gemini."""
     if not session_id:
         raise HTTPException(400, "No session")
 
-    return await process_single_station(session_id, station_id)
+    return await process_single_station(session_id, station_id, provider=req.provider, model=req.model)
 
 
 @app.post("/api/polling-stations/batch-process")
-async def batch_process_polling_stations(session_id: Optional[str] = Cookie(default=None)):
+async def batch_process_polling_stations(req: AIProviderRequest = AIProviderRequest(), session_id: Optional[str] = Cookie(default=None)):
     """Process all pending polling stations sequentially."""
     if not session_id:
         raise HTTPException(400, "No session")
@@ -1378,7 +1428,7 @@ async def batch_process_polling_stations(session_id: Optional[str] = Cookie(defa
     async def process_one(sid):
         async with sem:
             try:
-                result = await process_single_station(session_id, sid)
+                result = await process_single_station(session_id, sid, provider=req.provider, model=req.model)
                 processed.append(result)
             except Exception as e:
                 errors.append({"id": sid, "error": str(e)})

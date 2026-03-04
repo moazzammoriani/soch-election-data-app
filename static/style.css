@@ -852,3 +852,54 @@ input[type="text"] {
     margin-left: 6px;
     vertical-align: middle;
 }
+
+/* AI Settings Modal */
+.modal {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.modal.hidden { display: none; }
+.ai-settings-content {
+    background: white;
+    border-radius: 8px;
+    padding: 24px;
+    min-width: 320px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.15);
+}
+.ai-settings-content h3 { margin-top: 0; }
+.ai-settings-content label {
+    display: block;
+    margin-top: 12px;
+    margin-bottom: 4px;
+    font-weight: 600;
+    font-size: 0.9em;
+}
+.ai-settings-content select,
+.ai-settings-content input[type="text"] {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    font-size: 0.9em;
+    box-sizing: border-box;
+}
+.modal-actions {
+    margin-top: 16px;
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+#ai-settings-btn {
+    background: none;
+    border: 1px solid #d1d5db;
+    font-size: 1.2em;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+#ai-settings-btn:hover { background: #f3f4f6; }

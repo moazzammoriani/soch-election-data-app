@@ -1,3 +1,16 @@
+// AI Provider config (persisted in localStorage)
+const DEFAULT_PROVIDERS = {
+    openrouter: 'google/gemini-3-flash-preview',
+    gemini: 'gemini-3-flash-preview',
+};
+function getAIProvider() {
+    return JSON.parse(localStorage.getItem('aiProvider') ||
+        JSON.stringify({ provider: 'openrouter', model: DEFAULT_PROVIDERS.openrouter }));
+}
+function saveAIProvider(config) {
+    localStorage.setItem('aiProvider', JSON.stringify(config));
+}
+
 // State
 let pageCount = 0;
 let selectedPages = new Set();
@@ -904,7 +917,11 @@ async function processSingleStation(stationId) {
     }
 
     try {
-        const res = await fetch(`/api/polling-station/${stationId}/process`, { method: 'POST' });
+        const res = await fetch(`/api/polling-station/${stationId}/process`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(getAIProvider()),
+        });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail);
 
@@ -931,7 +948,11 @@ batchProcessBtn.addEventListener('click', async () => {
     });
 
     try {
-        const res = await fetch('/api/polling-stations/batch-process', { method: 'POST' });
+        const res = await fetch('/api/polling-stations/batch-process', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(getAIProvider()),
+        });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail);
 
@@ -1646,4 +1667,35 @@ document.getElementById('view-results-btn').addEventListener('click', async () =
     const data = await res.json();
     console.log('Results:', data);
     alert(`${data.length} records saved. Check console for details.`);
+});
+
+// --- AI Settings Modal ---
+
+const aiSettingsBtn = document.getElementById('ai-settings-btn');
+const aiSettingsModal = document.getElementById('ai-settings-modal');
+const aiProviderSelect = document.getElementById('ai-provider-select');
+const aiModelInput = document.getElementById('ai-model-input');
+
+aiSettingsBtn.addEventListener('click', () => {
+    const config = getAIProvider();
+    aiProviderSelect.value = config.provider;
+    aiModelInput.value = config.model;
+    aiSettingsModal.classList.remove('hidden');
+});
+
+aiProviderSelect.addEventListener('change', () => {
+    aiModelInput.value = DEFAULT_PROVIDERS[aiProviderSelect.value] || '';
+});
+
+document.getElementById('ai-settings-save').addEventListener('click', () => {
+    saveAIProvider({ provider: aiProviderSelect.value, model: aiModelInput.value });
+    aiSettingsModal.classList.add('hidden');
+});
+
+document.getElementById('ai-settings-cancel').addEventListener('click', () => {
+    aiSettingsModal.classList.add('hidden');
+});
+
+aiSettingsModal.addEventListener('click', (e) => {
+    if (e.target === aiSettingsModal) aiSettingsModal.classList.add('hidden');
 });
