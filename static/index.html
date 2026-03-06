@@ -144,11 +144,19 @@
                 <div id="auto-create-section">
                     <label for="pages-per-station">Pages per station:</label>
                     <input type="number" id="pages-per-station" min="1" max="10" value="1">
+                    <label for="max-rows-input">Max rows per page:</label>
+                    <input type="number" id="max-rows-input" min="0" value="0" placeholder="0 = no hint">
                     <label for="auto-start-page">From page:</label>
                     <input type="number" id="auto-start-page" min="1" value="1">
                     <label for="auto-end-page">To page:</label>
                     <input type="number" id="auto-end-page" min="1">
                     <button id="auto-create-btn">Auto-Create Polling Stations</button>
+                    <button id="detect-labels-btn">Detect Page Labels</button>
+                    <div id="page-labels-preview" class="hidden">
+                        <div id="page-labels-grid"></div>
+                        <p id="labels-summary"></p>
+                        <button id="smart-create-btn">Create Stations from Labels</button>
+                    </div>
                 </div>
                 <button id="toggle-thumbnails-btn">Show Thumbnails</button>
                 <div id="page-thumbnails" class="hidden"></div>

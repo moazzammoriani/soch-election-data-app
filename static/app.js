@@ -20,6 +20,7 @@ let currentStationId = null;
 let currentStationStatus = null; // 'pending', 'processed', or 'approved'
 let pollingStations = { pending: [], processed: [], approved: [] };
 let usedPages = new Set(); // Pages already in polling stations
+let pageLabels = null;
 
 // DOM Elements
 const dashboardSection = document.getElementById('dashboard-section');
@@ -904,6 +905,110 @@ document.getElementById('auto-create-btn').addEventListener('click', async () =>
     } finally {
         btn.disabled = false;
         btn.textContent = 'Automatically Create All Polling Stations';
+    }
+});
+
+// --- Detect Page Labels ---
+
+function renderPageLabelsPreview(labels, maxPages, startPage) {
+    const grid = document.getElementById('page-labels-grid');
+    grid.innerHTML = '';
+    let posInGroup = 0;
+    for (let i = 0; i < labels.length; i++) {
+        const label = labels[i];
+        const isBoundary = label === 1 && i > 0;
+        if (isBoundary) posInGroup = 0;
+        const expectedLabel = posInGroup + 1;
+        const isOk = label === expectedLabel && expectedLabel <= maxPages;
+        const cell = document.createElement('span');
+        cell.className = 'label-cell' + (isOk ? ' ok' : ' anomaly') + (isBoundary ? ' boundary' : '');
+        cell.textContent = label;
+        cell.title = `PDF page ${startPage + i} → form page ${label}`;
+        grid.appendChild(cell);
+        posInGroup++;
+    }
+}
+
+document.getElementById('detect-labels-btn').addEventListener('click', async () => {
+    const maxPages = parseInt(document.getElementById('pages-per-station').value);
+    const maxRows = parseInt(document.getElementById('max-rows-input').value) || 0;
+    const startPage = parseInt(document.getElementById('auto-start-page').value) || 1;
+    const endPage = parseInt(document.getElementById('auto-end-page').value) || pageCount;
+
+    if (!maxPages || maxPages < 1) {
+        alert('Please enter a valid number of pages per station');
+        return;
+    }
+
+    const btn = document.getElementById('detect-labels-btn');
+    btn.disabled = true;
+    btn.textContent = 'Detecting...';
+
+    try {
+        const aiProvider = getAIProvider();
+        const res = await fetch('/api/detect-page-labels', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                max_pages: maxPages,
+                max_rows: maxRows,
+                start_page: startPage - 1,
+                end_page: endPage,
+                provider: aiProvider.provider,
+                model: aiProvider.model,
+            }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+
+        pageLabels = data.page_labels;
+        renderPageLabelsPreview(pageLabels, maxPages, startPage);
+        const s = data.summary;
+        document.getElementById('labels-summary').textContent =
+            `${s.total} forms detected: ${s.complete_forms} complete, ${s.anomalous_forms} anomalous`;
+        document.getElementById('page-labels-preview').classList.remove('hidden');
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Detect Page Labels';
+    }
+});
+
+document.getElementById('smart-create-btn').addEventListener('click', async () => {
+    const maxPages = parseInt(document.getElementById('pages-per-station').value);
+    const startPage = parseInt(document.getElementById('auto-start-page').value) || 1;
+    const endPage = parseInt(document.getElementById('auto-end-page').value) || pageCount;
+
+    const btn = document.getElementById('smart-create-btn');
+    btn.disabled = true;
+    btn.textContent = 'Creating...';
+
+    try {
+        const res = await fetch('/api/polling-stations/smart-create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                max_pages: maxPages,
+                start_page: startPage - 1,
+                end_page: endPage,
+            }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+
+        alert(`Created ${data.stations.length} stations (${data.anomaly_count} anomalous)`);
+        selectedPages.clear();
+        await loadPollingStations();
+        renderPageThumbnails();
+        updateProgress();
+        document.getElementById('page-labels-preview').classList.add('hidden');
+        pageLabels = null;
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Create Stations from Labels';
     }
 });
 

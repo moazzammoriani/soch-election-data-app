@@ -746,6 +746,7 @@ input[type="text"] {
 #auto-create-section {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 10px;
     margin-top: 10px;
 }
@@ -903,3 +904,51 @@ input[type="text"] {
     border-radius: 4px;
 }
 #ai-settings-btn:hover { background: #f3f4f6; }
+
+/* Page Labels Grid */
+#page-labels-preview {
+    margin-top: 10px;
+    width: 100%;
+}
+
+#page-labels-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    margin-bottom: 8px;
+}
+
+.label-cell {
+    width: 30px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    border-radius: 3px;
+    font-weight: 500;
+}
+
+.label-cell.ok {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.label-cell.anomaly {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.label-cell.boundary {
+    margin-left: 6px;
+}
+
+#labels-summary {
+    font-size: 13px;
+    color: #6b7280;
+    margin: 4px 0 8px;
+}
+
+#max-rows-input {
+    width: 80px;
+}

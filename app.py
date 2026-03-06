@@ -139,6 +139,10 @@ def init_db():
         conn.execute("ALTER TABLE polling_station_queue ADD COLUMN source TEXT DEFAULT 'ecp'")
     except sqlite3.OperationalError:
         pass
+    try:
+        conn.execute("ALTER TABLE sessions ADD COLUMN page_labels TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -165,6 +169,7 @@ def get_session(session_id: str) -> Optional[dict]:
             "province": row["province"],
             "seat_type": row["seat_type"],
             "comparison_source": row["comparison_source"],
+            "page_labels": json.loads(row["page_labels"]) if row["page_labels"] else None,
         }
     return None
 
@@ -183,7 +188,7 @@ def update_session(session_id: str, **kwargs):
     updates = []
     values = []
     for key, value in kwargs.items():
-        if key in ("processed_pages", "schema_fields", "pending_pages", "pending_form_data"):
+        if key in ("processed_pages", "schema_fields", "pending_pages", "pending_form_data", "page_labels"):
             value = json.dumps(value) if value is not None else None
         updates.append(f"{key} = ?")
         values.append(value)
@@ -430,6 +435,25 @@ class BatchCreatePollingStationsRequest(BaseModel):
 class AIProviderRequest(BaseModel):
     provider: str = "openrouter"
     model: str = "google/gemini-3-flash-preview"
+
+
+class PageGuesses(BaseModel):
+    pages: list[int]
+
+
+class DetectPageLabelsRequest(BaseModel):
+    max_pages: int
+    max_rows: int = 0
+    start_page: int = 0
+    end_page: Optional[int] = None
+    provider: str = "openrouter"
+    model: str = "google/gemini-3-flash-preview"
+
+
+class SmartCreateRequest(BaseModel):
+    max_pages: int
+    start_page: int = 0
+    end_page: Optional[int] = None
 
 
 class ApprovePollingStationRequest(BaseModel):
@@ -1131,6 +1155,186 @@ async def batch_create_polling_stations(req: BatchCreatePollingStationsRequest, 
     return {"stations": stations}
 
 
+@app.post("/api/detect-page-labels")
+async def detect_page_labels(req: DetectPageLabelsRequest, session_id: Optional[str] = Cookie(default=None)):
+    """Detect page labels for smart polling station creation."""
+    if not session_id:
+        raise HTTPException(400, "No session")
+    session = get_session(session_id)
+    if not session or not session["pdf_path"]:
+        raise HTTPException(400, "No PDF uploaded")
+
+    page_count = session["page_count"]
+    start = req.start_page
+    end = req.end_page if req.end_page is not None else page_count
+    if start < 0 or end > page_count or start >= end:
+        raise HTTPException(400, "Invalid page range")
+
+    all_pages = list(range(start, end))
+
+    # Extract images at low DPI, no deskew for speed
+    images, _ = await extract_page_images(session["pdf_path"], all_pages, dpi=100, deskew=False)
+
+    # Batch images into groups of max_pages
+    batches = []
+    for i in range(0, len(images), req.max_pages):
+        batches.append(images[i:i + req.max_pages])
+
+    # Build prompt
+    rows_hint = ""
+    if req.max_rows > 0:
+        rows_hint = f"\nEach page of this form contains at most {req.max_rows} rows. Use visible row numbers as a clue: if row numbering resets to 1, that image is page 1 (or a new page 1 continuation). An image showing only partial rows still counts as a full page."
+
+    prompt = f"""Look at each image in order. For each one, identify the page number of the election form.
+Always return a numeric page number. If you are not certain, make your best guess.
+Return exactly one integer per image, in the same order.
+Valid page numbers are between 1 and {req.max_pages}. Do not return a page number outside this range.
+The last page (page {req.max_pages}) contains summary information and is identifiable by rows labeled (A), (B), (C), and (D) at the bottom in addition to regular numbered rows.{rows_hint}"""
+
+    # Process each batch concurrently
+    async def process_batch(batch_images):
+        content_parts = [{"type": "text", "text": prompt}]
+        for img_bytes in batch_images:
+            content_parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(img_bytes).decode()}"}})
+        response = await call_gemini_with_retry(
+            content_parts, PageGuesses, schema_name="PageGuesses",
+            provider=req.provider, model=req.model
+        )
+        result = PageGuesses.model_validate_json(response.choices[0].message.content)
+        return result.pages
+
+    tasks = [process_batch(batch) for batch in batches]
+    batch_results = await asyncio.gather(*tasks)
+
+    # Flatten results
+    page_labels = []
+    for result in batch_results:
+        page_labels.extend(result)
+
+    # Ensure we have the right number of labels
+    if len(page_labels) != len(all_pages):
+        raise HTTPException(500, f"Expected {len(all_pages)} labels, got {len(page_labels)}")
+
+    # Store as full-length list indexed by absolute page number
+    full_labels = [0] * page_count
+    for i, page_idx in enumerate(all_pages):
+        full_labels[page_idx] = page_labels[i]
+
+    # Save to session
+    update_session(session_id, page_labels=full_labels)
+
+    # Compute summary
+    max_pages = req.max_pages
+    complete_forms = 0
+    anomalous_forms = 0
+    current = []
+    for label in page_labels:
+        if label == 1 and current:
+            expected = list(range(1, max_pages + 1))
+            if current == expected:
+                complete_forms += 1
+            else:
+                anomalous_forms += 1
+            current = []
+        current.append(label)
+    if current:
+        expected = list(range(1, max_pages + 1))
+        if current == expected:
+            complete_forms += 1
+        else:
+            anomalous_forms += 1
+
+    return {
+        "page_labels": page_labels,
+        "summary": {
+            "total": complete_forms + anomalous_forms,
+            "complete_forms": complete_forms,
+            "anomalous_forms": anomalous_forms,
+        }
+    }
+
+
+@app.post("/api/polling-stations/smart-create")
+async def smart_create_polling_stations(req: SmartCreateRequest, session_id: Optional[str] = Cookie(default=None)):
+    """Create polling stations using detected page labels."""
+    if not session_id:
+        raise HTTPException(400, "No session")
+    session = get_session(session_id)
+    if not session or not session["pdf_path"]:
+        raise HTTPException(400, "No PDF uploaded")
+    if not session.get("page_labels"):
+        raise HTTPException(400, "No page labels detected. Run detect-page-labels first.")
+
+    page_labels = session["page_labels"]
+    page_count = session["page_count"]
+    start = req.start_page
+    end = req.end_page if req.end_page is not None else page_count
+    if start < 0 or end > page_count or start >= end:
+        raise HTTPException(400, "Invalid page range")
+
+    # Get used pages
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    existing = conn.execute(
+        "SELECT pages FROM polling_station_queue WHERE session_id = ?",
+        (session_id,)
+    ).fetchall()
+    used_pages = set()
+    for row in existing:
+        used_pages.update(json.loads(row["pages"]))
+
+    # Filter to unused pages in range
+    unused_pages = [i for i in range(start, end) if i not in used_pages]
+
+    if not unused_pages:
+        conn.close()
+        raise HTTPException(400, "No unused pages in the specified range")
+
+    # Group by page-1 boundaries
+    groups = []
+    current = []
+    for idx in unused_pages:
+        if idx < len(page_labels):
+            label = page_labels[idx]
+        else:
+            label = 0
+        if label == 1 and current:
+            groups.append(current)
+            current = []
+        current.append(idx)
+    if current:
+        groups.append(current)
+
+    # Get current count for naming
+    count = conn.execute(
+        "SELECT COUNT(*) FROM polling_station_queue WHERE session_id = ?",
+        (session_id,)
+    ).fetchone()[0]
+
+    # Insert stations
+    stations = []
+    anomaly_count = 0
+    expected = list(range(1, req.max_pages + 1))
+    for i, group in enumerate(groups):
+        actual = [page_labels[p] if p < len(page_labels) else 0 for p in group]
+        is_anomaly = actual != expected
+        if is_anomaly:
+            anomaly_count += 1
+        name = f"Polling Station {count + i + 1}"
+        if is_anomaly:
+            name += " [!]"
+        cursor = conn.execute(
+            "INSERT INTO polling_station_queue (session_id, name, pages, status) VALUES (?, ?, ?, 'pending')",
+            (session_id, name, json.dumps(group))
+        )
+        stations.append({"id": cursor.lastrowid, "name": name, "pages": group, "status": "pending"})
+
+    conn.commit()
+    conn.close()
+
+    return {"stations": stations, "anomaly_count": anomaly_count}
+
+
 @app.get("/api/polling-station/{station_id}")
 async def get_polling_station(station_id: int, session_id: Optional[str] = Cookie(default=None)):
     """Get a specific polling station's details."""
@@ -1287,6 +1491,30 @@ async def rename_polling_station(station_id: int, req: RenamePollingStationReque
     return {"status": "ok", "name": new_name}
 
 
+async def extract_page_images(pdf_path: str, pages: list[int], dpi: int = 150, deskew: bool = True) -> tuple[list[bytes], list[float]]:
+    """Extract PDF pages as PNG bytes. Returns (images, skew_angles)."""
+    def _extract():
+        doc = fitz.open(pdf_path)
+        imgs = []
+        angles = []
+        for page_num in pages:
+            page = doc[page_num]
+            pix = page.get_pixmap(dpi=dpi)
+            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+            if pix.n == 4:
+                img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+            if deskew:
+                img, skew_angle = deskew_image(img)
+                angles.append(skew_angle)
+            else:
+                angles.append(0.0)
+            _, png_bytes = cv2.imencode('.png', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+            imgs.append(png_bytes.tobytes())
+        doc.close()
+        return imgs, angles
+    return await asyncio.to_thread(_extract)
+
+
 async def process_single_station(session_id: str, station_id: int, provider: str = "openrouter", model: str = "google/gemini-3-flash-preview") -> dict:
     """Process a single polling station with Gemini. Returns the form data."""
     session = get_session(session_id)
@@ -1321,31 +1549,7 @@ async def process_single_station(session_id: str, station_id: int, provider: str
         **field_definitions,
     )
 
-    # Extract page images (CPU-heavy, run in thread to avoid blocking event loop)
-    def extract_and_deskew():
-        doc = fitz.open(session["pdf_path"])
-        imgs = []
-        angles = []
-        for page_num in pages:
-            page = doc[page_num]
-            pix = page.get_pixmap(dpi=150)
-
-            # Convert to numpy array for deskewing
-            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-            if pix.n == 4:  # RGBA
-                img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
-
-            # Apply deskewing
-            deskewed, skew_angle = deskew_image(img)
-            angles.append(skew_angle)
-
-            # Convert back to PNG bytes
-            _, png_bytes = cv2.imencode('.png', cv2.cvtColor(deskewed, cv2.COLOR_RGB2BGR))
-            imgs.append(png_bytes.tobytes())
-        doc.close()
-        return imgs, angles
-
-    images, skew_angles = await asyncio.to_thread(extract_and_deskew)
+    images, skew_angles = await extract_page_images(session["pdf_path"], pages, dpi=150, deskew=True)
 
     # Build prompt
     prompt = """Analyze this election form and extract the values into the specified schema.
