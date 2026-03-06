@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 import sqlite3
 import time
@@ -462,6 +463,11 @@ class ApprovePollingStationRequest(BaseModel):
 
 class RenamePollingStationRequest(BaseModel):
     name: str
+
+
+class RenumberRequest(BaseModel):
+    from_number: int
+    offset: int
 
 
 PROVINCES = ["Punjab", "Sindh", "KPK", "Balochistan"]
@@ -1489,6 +1495,71 @@ async def rename_polling_station(station_id: int, req: RenamePollingStationReque
     conn.close()
 
     return {"status": "ok", "name": new_name}
+
+
+@app.post("/api/polling-stations/renumber")
+async def renumber_polling_stations(req: RenumberRequest, session_id: Optional[str] = Cookie(default=None)):
+    """Bulk rename stations: all stations with trailing number >= from_number get offset added."""
+    if not session_id:
+        raise HTTPException(400, "No session")
+    if req.offset == 0:
+        raise HTTPException(400, "Offset cannot be zero")
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    rows = conn.execute(
+        "SELECT id, name FROM polling_station_queue WHERE session_id = ?",
+        (session_id,)
+    ).fetchall()
+
+    pattern = re.compile(r'(\d+)\s*$')
+
+    # Parse trailing numbers and split into selected vs unselected
+    selected = []  # (id, name, parsed_number)
+    unselected_names = set()
+    for row in rows:
+        m = pattern.search(row["name"])
+        if m:
+            num = int(m.group(1))
+            if num >= req.from_number:
+                selected.append((row["id"], row["name"], num))
+            else:
+                unselected_names.add(row["name"])
+        else:
+            unselected_names.add(row["name"])
+
+    if not selected:
+        conn.close()
+        raise HTTPException(400, f"No stations found with number >= {req.from_number}")
+
+    # Compute new names and check for collisions
+    renames = []
+    for sid, name, num in selected:
+        new_num = num + req.offset
+        if new_num < 1:
+            conn.close()
+            raise HTTPException(400, f"Renumbering would make '{name}' have number {new_num} (< 1)")
+        new_name = pattern.sub(str(new_num), name)
+        renames.append((sid, new_name, num))
+
+    # Check collisions with unselected stations
+    new_names = {r[1] for r in renames}
+    collisions = new_names & unselected_names
+    if collisions:
+        conn.close()
+        raise HTTPException(400, f"Renumbering would collide with: {', '.join(sorted(collisions))}")
+
+    # Sort to avoid intermediate collisions: highest first for positive offset, lowest first for negative
+    renames.sort(key=lambda r: r[2], reverse=(req.offset > 0))
+
+    for sid, new_name, _ in renames:
+        conn.execute("UPDATE polling_station_queue SET name = ? WHERE id = ?", (new_name, sid))
+
+    conn.commit()
+    conn.close()
+
+    return {"status": "ok", "renamed": len(renames)}
 
 
 async def extract_page_images(pdf_path: str, pages: list[int], dpi: int = 150, deskew: bool = True) -> tuple[list[bytes], list[float]]:

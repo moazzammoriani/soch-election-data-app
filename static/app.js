@@ -669,6 +669,39 @@ async function startRename(stationId) {
     });
 }
 
+document.getElementById('renumber-btn').addEventListener('click', async () => {
+    const fromStr = prompt('Renumber stations starting from station #:');
+    if (fromStr === null) return;
+    const fromNumber = parseInt(fromStr);
+    if (isNaN(fromNumber) || fromNumber < 1) {
+        alert('Please enter a valid station number');
+        return;
+    }
+
+    const offsetStr = prompt('Offset (e.g., 1 to increment, -1 to decrement):');
+    if (offsetStr === null) return;
+    const offset = parseInt(offsetStr);
+    if (isNaN(offset) || offset === 0) {
+        alert('Please enter a non-zero offset');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/polling-stations/renumber', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ from_number: fromNumber, offset }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+
+        alert(`Renumbered ${data.renamed} stations`);
+        await loadPollingStations();
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    }
+});
+
 function renderQueues() {
     // Pending queue
     const deleteAllPendingBtn = document.getElementById('delete-all-pending-btn');
