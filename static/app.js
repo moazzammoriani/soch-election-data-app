@@ -334,6 +334,10 @@ async function restoreSession() {
         document.getElementById('seat-type-select').value = session.seat_type || '';
         comparisonSource = session.comparison_source || null;
 
+        // Reset page labels state before switching
+        pageLabels = null;
+        document.getElementById('page-labels-preview').classList.add('hidden');
+
         // Show appropriate step
         showStep(session.step);
 
@@ -911,22 +915,100 @@ document.getElementById('auto-create-btn').addEventListener('click', async () =>
 // --- Detect Page Labels ---
 
 function renderPageLabelsPreview(labels, maxPages, startPage) {
-    const grid = document.getElementById('page-labels-grid');
-    grid.innerHTML = '';
-    let posInGroup = 0;
+    const container = document.getElementById('page-labels-grid');
+    container.innerHTML = '';
+
+    // Step 1: Group labels into forms by splitting on label === 1
+    const groups = [];
+    let current = null;
     for (let i = 0; i < labels.length; i++) {
-        const label = labels[i];
-        const isBoundary = label === 1 && i > 0;
-        if (isBoundary) posInGroup = 0;
-        const expectedLabel = posInGroup + 1;
-        const isOk = label === expectedLabel && expectedLabel <= maxPages;
-        const cell = document.createElement('span');
-        cell.className = 'label-cell' + (isOk ? ' ok' : ' anomaly') + (isBoundary ? ' boundary' : '');
-        cell.textContent = label;
-        cell.title = `PDF page ${startPage + i} → form page ${label}`;
-        grid.appendChild(cell);
-        posInGroup++;
+        if (labels[i] === 1 || current === null) {
+            if (current) groups.push(current);
+            current = { pages: [], startIdx: i };
+        }
+        current.pages.push(labels[i]);
     }
+    if (current) groups.push(current);
+
+    // Step 2: Separate complete vs anomalous
+    const expected = Array.from({ length: maxPages }, (_, i) => i + 1);
+    const expectedKey = JSON.stringify(expected);
+    let completeCount = 0;
+    const anomalous = [];
+    for (const g of groups) {
+        if (JSON.stringify(g.pages) === expectedKey) {
+            completeCount++;
+        } else {
+            const imgStart = startPage + g.startIdx;
+            const imgEnd = imgStart + g.pages.length - 1;
+            anomalous.push({
+                images: imgStart === imgEnd ? `${imgStart}` : `${imgStart}\u2013${imgEnd}`,
+                pages: g.pages,
+            });
+        }
+    }
+
+    // Step 3: Categorize anomalous by pattern
+    const categories = {};
+    for (const item of anomalous) {
+        const key = JSON.stringify(item.pages);
+        if (!categories[key]) {
+            categories[key] = { pages: item.pages, description: describeAnomaly(item.pages, maxPages), items: [] };
+        }
+        categories[key].items.push(item);
+    }
+
+    // Step 4: Render
+    document.getElementById('labels-summary').textContent =
+        `${groups.length} forms: ${completeCount} complete, ${anomalous.length} anomalous`;
+
+    if (anomalous.length === 0) return;
+
+    // Render each anomaly category
+    const sortedCats = Object.values(categories).sort((a, b) => b.items.length - a.items.length);
+    for (const cat of sortedCats) {
+        const div = document.createElement('div');
+        div.className = 'anomaly-category';
+
+        const heading = document.createElement('h4');
+        heading.textContent = `${cat.description} (${cat.items.length})`;
+        div.appendChild(heading);
+
+        const table = document.createElement('table');
+        table.className = 'anomaly-table';
+        table.innerHTML = `<thead><tr><th>Images</th><th>Pages</th></tr></thead>`;
+        const tbody = document.createElement('tbody');
+        for (const item of cat.items) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${item.images}</td><td>${item.pages.join(', ')}</td>`;
+            tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        div.appendChild(table);
+        container.appendChild(div);
+    }
+}
+
+function describeAnomaly(pages, maxPages) {
+    const expected = Array.from({ length: maxPages }, (_, i) => i + 1);
+
+    if (pages.length === 1) return `Solo page ${pages[0]}`;
+
+    // Find missing and duplicate pages
+    const countMap = {};
+    for (const p of pages) countMap[p] = (countMap[p] || 0) + 1;
+
+    const missing = expected.filter(p => !countMap[p]);
+    const duplicates = Object.entries(countMap).filter(([, c]) => c > 1).map(([p]) => parseInt(p));
+    const extras = pages.filter(p => p > maxPages);
+
+    const parts = [];
+    if (missing.length) parts.push(`Missing page${missing.length > 1 ? 's' : ''} ${missing.join(', ')}`);
+    if (duplicates.length) parts.push(`Duplicate page${duplicates.length > 1 ? 's' : ''} ${duplicates.join(', ')}`);
+    if (extras.length) parts.push(`Extra page${extras.length > 1 ? 's' : ''} ${extras.join(', ')}`);
+
+    if (parts.length) return parts.join('; ');
+    return `Unexpected pattern [${pages.join(', ')}]`;
 }
 
 document.getElementById('detect-labels-btn').addEventListener('click', async () => {
@@ -963,9 +1045,6 @@ document.getElementById('detect-labels-btn').addEventListener('click', async () 
 
         pageLabels = data.page_labels;
         renderPageLabelsPreview(pageLabels, maxPages, startPage);
-        const s = data.summary;
-        document.getElementById('labels-summary').textContent =
-            `${s.total} forms detected: ${s.complete_forms} complete, ${s.anomalous_forms} anomalous`;
         document.getElementById('page-labels-preview').classList.remove('hidden');
     } catch (err) {
         alert(`Error: ${err.message}`);

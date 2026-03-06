@@ -912,35 +912,40 @@ input[type="text"] {
 }
 
 #page-labels-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px;
     margin-bottom: 8px;
 }
 
-.label-cell {
-    width: 30px;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 11px;
-    border-radius: 3px;
-    font-weight: 500;
+.anomaly-category {
+    margin-bottom: 12px;
 }
 
-.label-cell.ok {
-    background: #d1fae5;
-    color: #065f46;
-}
-
-.label-cell.anomaly {
-    background: #fee2e2;
+.anomaly-category h4 {
+    font-size: 13px;
+    font-weight: 600;
     color: #991b1b;
+    margin: 8px 0 4px;
 }
 
-.label-cell.boundary {
-    margin-left: 6px;
+.anomaly-table {
+    border-collapse: collapse;
+    font-size: 12px;
+    width: auto;
+}
+
+.anomaly-table th,
+.anomaly-table td {
+    padding: 3px 10px;
+    border: 1px solid #d1d5db;
+    text-align: left;
+}
+
+.anomaly-table th {
+    background: #f9fafb;
+    font-weight: 600;
+}
+
+.anomaly-table td:first-child {
+    font-family: monospace;
 }
 
 #labels-summary {
