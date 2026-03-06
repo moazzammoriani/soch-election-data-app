@@ -1183,7 +1183,7 @@ async def detect_page_labels(req: DetectPageLabelsRequest, session_id: Optional[
     # Build prompt
     rows_hint = ""
     if req.max_rows > 0:
-        rows_hint = f"\nEach page of this form contains at most {req.max_rows} rows. Use visible row numbers as a clue: if row numbering resets to 1, that image is page 1 (or a new page 1 continuation). An image showing only partial rows still counts as a full page."
+        rows_hint = f"\nEach station has at most {req.max_rows} rows total across all its pages. Use visible row numbers as a clue: if row numbering resets to 1, that image is page 1. If the row numbers reach or approach {req.max_rows}, that image is likely the last page of the station."
 
     prompt = f"""Look at each image in order. For each one, identify the page number of the election form.
 Always return a numeric page number. If you are not certain, make your best guess.
