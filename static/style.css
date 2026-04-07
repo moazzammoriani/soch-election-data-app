@@ -212,6 +212,15 @@ h3 {
 .session-status.process { background: #d1fae5; color: #065f46; }
 .session-status.complete { background: #10b981; color: white; }
 
+.session-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+}
+.session-tag.matched { background: #e0e7ff; color: #3730a3; }
+
 .empty-state {
     text-align: center;
     padding: 40px;

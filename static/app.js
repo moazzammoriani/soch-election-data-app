@@ -117,6 +117,7 @@ function renderSessionCard(s) {
                 <p>${candidates || 'No candidates defined'}</p>
                 <div class="session-meta">
                     <span class="session-status ${s.step}">${s.step}</span>
+                    ${s.matched_count ? `<span class="session-tag matched">${s.matched_count} matched</span>` : ''}
                     <span>${s.processed_pages.length} / ${s.page_count} pages</span>
                     <span>${progress}% complete</span>
                 </div>
@@ -593,12 +594,15 @@ function renderQueueItem(ps, type) {
         const sourceTag = ps.source && ps.source !== 'ecp'
             ? `<span class="source-tag">${ps.source}</span>`
             : '';
+        const matchedTag = ps.pscm_matched
+            ? '<span class="session-tag matched">pscm matched</span>'
+            : '';
         const pagesText = ps.pages && ps.pages.length > 0
             ? `<div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>`
             : '';
         return `
             <div class="queue-item${flaggedClass}" data-id="${ps.id}">
-                <div class="queue-item-header">${nameHtml}${sourceTag}</div>
+                <div class="queue-item-header">${nameHtml}${sourceTag}${matchedTag}</div>
                 ${pagesText}
                 ${flagsHtml}
                 <div class="queue-item-actions">

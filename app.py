@@ -473,6 +473,16 @@ class RenumberRequest(BaseModel):
 PROVINCES = ["Punjab", "Sindh", "KPK", "Balochistan"]
 
 
+def normalize_seat_name(pdf_name: str) -> Optional[str]:
+    """Normalize a pdf_name like 'NA-239.pdf' to canonical seat_name like 'na_239'."""
+    if not pdf_name:
+        return None
+    m = re.search(r'(na|pp|ps)[-_ ]*(\d+)', pdf_name, re.IGNORECASE)
+    if not m:
+        return None
+    return f"{m.group(1).lower()}_{int(m.group(2))}"
+
+
 # --- Endpoints ---
 
 @app.get("/api/provinces")
@@ -497,7 +507,43 @@ async def list_sessions():
     rows = conn.execute(
         "SELECT * FROM sessions ORDER BY updated_at DESC"
     ).fetchall()
+
+    # Build session_id -> normalized seat_name mapping
+    seat_names = {}
+    for row in rows:
+        seat_name = normalize_seat_name(row["pdf_name"])
+        if seat_name:
+            seat_names[row["id"]] = seat_name
+
+    # Preload set of all matched canonical (seat_name, station_num) pairs
+    matched_pairs = set()
+    if seat_names:
+        matched_rows = conn.execute("""
+            SELECT pss.seat_name, pss.polling_station_num
+            FROM polling_scheme_station pss
+            JOIN polling_scheme_match psm ON psm.nat_station_id = pss.id
+        """).fetchall()
+        matched_pairs = {(r["seat_name"], r["polling_station_num"]) for r in matched_rows}
+
+    # Get all ECP queue rows to count matches per session
+    queue_rows = conn.execute("""
+        SELECT session_id, name FROM polling_station_queue
+        WHERE source = 'ecp' AND name LIKE 'Polling Station %'
+    """).fetchall()
     conn.close()
+
+    station_num_re = re.compile(r'^Polling Station\s+(\d+)$')
+    match_counts = {}
+    for qr in queue_rows:
+        sid = qr["session_id"]
+        seat_name = seat_names.get(sid)
+        if not seat_name:
+            continue
+        m = station_num_re.match(qr["name"])
+        if not m:
+            continue
+        if (seat_name, int(m.group(1))) in matched_pairs:
+            match_counts[sid] = match_counts.get(sid, 0) + 1
 
     sessions = []
     for row in rows:
@@ -512,6 +558,7 @@ async def list_sessions():
             "seat_type": row["seat_type"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+            "matched_count": match_counts.get(row["id"], 0),
         }
         session["step"] = get_session_step({
             "pdf_name": session["pdf_name"],
@@ -1020,7 +1067,21 @@ async def list_polling_stations(session_id: Optional[str] = Cookie(default=None)
         "SELECT * FROM polling_station_queue WHERE session_id = ? ORDER BY id ASC",
         (session_id,)
     ).fetchall()
+
+    # Build set of matched (seat_name, station_num) pairs for this session
+    seat_name = normalize_seat_name(session.get("pdf_name"))
+    matched_pairs = set()
+    if seat_name:
+        matched_rows = conn.execute("""
+            SELECT pss.polling_station_num
+            FROM polling_scheme_station pss
+            JOIN polling_scheme_match psm ON psm.nat_station_id = pss.id
+            WHERE pss.seat_name = ?
+        """, (seat_name,)).fetchall()
+        matched_pairs = {r["polling_station_num"] for r in matched_rows}
     conn.close()
+
+    station_num_re = re.compile(r'^Polling Station\s+(\d+)$')
 
     result = {"pending": [], "processed": [], "approved": []}
     for r in rows:
@@ -1032,14 +1093,21 @@ async def list_polling_stations(session_id: Optional[str] = Cookie(default=None)
                 session["candidate_1"]["name"],
                 session["candidate_2"]["name"]
             )
+        pscm_matched = False
+        source = r["source"] if "source" in r.keys() else "ecp"
+        if source == "ecp" and matched_pairs:
+            m = station_num_re.match(r["name"])
+            if m and int(m.group(1)) in matched_pairs:
+                pscm_matched = True
         item = {
             "id": r["id"],
             "name": r["name"],
             "pages": json.loads(r["pages"]),
             "status": r["status"],
-            "source": r["source"] if "source" in r.keys() else "ecp",
+            "source": source,
             "form_data": form_data,
             "flags": flags,
+            "pscm_matched": pscm_matched,
         }
         result[r["status"]].append(item)
 
