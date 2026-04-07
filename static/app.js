@@ -1547,6 +1547,8 @@ let stationsWonChart = null;
 let highTurnoutChart = null;
 let winnerScatterChart = null;
 let turnoutByStationChart = null;
+let naPaTurnoutDiffChart = null;
+let naPaTurnoutDiffData = null;
 let chartData = null;
 let chartSessionId = null;
 
@@ -1556,6 +1558,8 @@ function destroyCharts() {
     if (highTurnoutChart) { highTurnoutChart.destroy(); highTurnoutChart = null; }
     if (winnerScatterChart) { winnerScatterChart.destroy(); winnerScatterChart = null; }
     if (turnoutByStationChart) { turnoutByStationChart.destroy(); turnoutByStationChart = null; }
+    if (naPaTurnoutDiffChart) { naPaTurnoutDiffChart.destroy(); naPaTurnoutDiffChart = null; }
+    naPaTurnoutDiffData = null;
 }
 
 function renderVoteTotalsChart(data) {
@@ -1801,6 +1805,67 @@ function renderTurnoutByStationChart(data) {
     });
 }
 
+function renderNaPaTurnoutDiffChart(data) {
+    if (naPaTurnoutDiffChart) { naPaTurnoutDiffChart.destroy(); naPaTurnoutDiffChart = null; }
+
+    if (!data.stations || data.stations.length === 0) return;
+
+    const labels = data.stations.map(s => s.na_station_num);
+    const diffs = data.stations.map(s => Math.round(s.diff * 100 * 10) / 10);
+
+    const ctx = document.getElementById('na-pa-turnout-diff-chart').getContext('2d');
+    naPaTurnoutDiffChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Turnout Difference',
+                data: diffs,
+                backgroundColor: '#8b5cf6',
+            }],
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        title: (items) => `NA Station ${items[0].label}`,
+                        label: (ctx) => {
+                            const station = data.stations[ctx.dataIndex];
+                            const naPct = (station.na_turnout * 100).toFixed(1);
+                            const paPct = (station.pa_turnout * 100).toFixed(1);
+                            return [
+                                `Diff: ${ctx.parsed.y.toFixed(1)} pp`,
+                                `NA: ${naPct}% | PA (${station.pa_seat_name} #${station.pa_station_num}): ${paPct}%`,
+                            ];
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: { title: { display: true, text: 'Polling Station Number' } },
+                y: {
+                    beginAtZero: true,
+                    title: { display: true, text: 'Turnout Difference (pp)' },
+                },
+            },
+        },
+    });
+}
+
+async function fetchNaPaTurnoutDiff(sessionId) {
+    try {
+        const res = await fetch(`/api/sessions/${sessionId}/na-pa-turnout-diff`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Failed to load data');
+        naPaTurnoutDiffData = data;
+        renderNaPaTurnoutDiffChart(data);
+    } catch (err) {
+        console.error('NA-PA turnout diff error:', err);
+    }
+}
+
 function switchChartTab(tab) {
     document.querySelectorAll('.chart-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
     document.getElementById('chart-votes').classList.toggle('hidden', tab !== 'votes');
@@ -1808,6 +1873,7 @@ function switchChartTab(tab) {
     document.getElementById('chart-high-turnout').classList.toggle('hidden', tab !== 'high-turnout');
     document.getElementById('chart-winner-scatter').classList.toggle('hidden', tab !== 'winner-scatter');
     document.getElementById('chart-turnout-by-station').classList.toggle('hidden', tab !== 'turnout-by-station');
+    document.getElementById('chart-na-pa-turnout-diff').classList.toggle('hidden', tab !== 'na-pa-turnout-diff');
 
     const titleBase = chartData ? chartData.pdf_name : '';
     if (tab === 'votes') {
@@ -1825,6 +1891,13 @@ function switchChartTab(tab) {
     } else if (tab === 'turnout-by-station') {
         document.getElementById('chart-title').textContent = `Turnout by Station — ${titleBase}`;
         renderTurnoutByStationChart(chartData);
+    } else if (tab === 'na-pa-turnout-diff') {
+        document.getElementById('chart-title').textContent = `NA-PA Turnout Difference — ${titleBase}`;
+        if (naPaTurnoutDiffData) {
+            renderNaPaTurnoutDiffChart(naPaTurnoutDiffData);
+        } else if (chartSessionId) {
+            fetchNaPaTurnoutDiff(chartSessionId);
+        }
     }
 }
 
@@ -1857,8 +1930,17 @@ async function openCharts(sessionId, source = 'ecp', tab = null) {
             toggleIds.forEach(id => document.getElementById(id).classList.add('hidden'));
         }
 
+        // Show/hide NA-PA tab based on seat type
+        const naPaTab = document.querySelector('.chart-tab[data-tab="na-pa-turnout-diff"]');
+        if (naPaTab) {
+            naPaTab.style.display = (data.seat_type === 'National') ? '' : 'none';
+        }
+
         // Use provided tab or default to votes
-        const activeTab = tab || document.querySelector('.chart-tab.active')?.dataset.tab || 'votes';
+        let activeTab = tab || document.querySelector('.chart-tab.active')?.dataset.tab || 'votes';
+        if (activeTab === 'na-pa-turnout-diff' && data.seat_type !== 'National') {
+            activeTab = 'votes';
+        }
         switchChartTab(activeTab);
     } catch (err) {
         alert(`Error: ${err.message}`);

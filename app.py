@@ -644,6 +644,127 @@ async def get_chart_data(target_session_id: str, source: str = "ecp"):
         "per_station": per_station,
         "source": source,
         "comparison_source": session["comparison_source"],
+        "seat_type": session.get("seat_type"),
+    }
+
+
+def _compute_turnout(form_data: dict) -> Optional[float]:
+    """Compute turnout ratio from form data."""
+    row_a = form_data.get("row_a", {}).get("value") or 0
+    row_d = form_data.get("row_d", {}).get("value") or 0
+    votes_cast = row_a if row_a else row_d
+    registered = form_data.get("total_registered_voters", {}).get("value") or 0
+    return (votes_cast / registered) if registered else None
+
+
+@app.get("/api/sessions/{target_session_id}/na-pa-turnout-diff")
+async def get_na_pa_turnout_diff(target_session_id: str):
+    """Get turnout difference data between matched NA and PA polling stations."""
+    session = get_session(target_session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    seat_name = normalize_seat_name(session.get("pdf_name"))
+    if not seat_name or not seat_name.startswith("na_"):
+        return {"na_seat": seat_name, "pa_seats": [], "stations": []}
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    # Get all (na_num -> pa_seat, pa_num) mappings
+    match_rows = conn.execute("""
+        SELECT nat.polling_station_num AS na_num,
+               prov.seat_name AS pa_seat, prov.polling_station_num AS pa_num
+        FROM polling_scheme_match psm
+        JOIN polling_scheme_station nat ON nat.id = psm.nat_station_id
+        JOIN polling_scheme_station prov ON prov.id = psm.prov_station_id
+        WHERE nat.seat_name = ?
+    """, (seat_name,)).fetchall()
+
+    if not match_rows:
+        conn.close()
+        return {"na_seat": seat_name, "pa_seats": [], "stations": []}
+
+    pa_seat_names = {r["pa_seat"] for r in match_rows}
+
+    # Find session IDs for PA seats
+    prov_sessions = conn.execute(
+        "SELECT id, pdf_name FROM sessions WHERE seat_type = 'Provincial'"
+    ).fetchall()
+    pa_seat_to_session = {}
+    for ps in prov_sessions:
+        sn = normalize_seat_name(ps["pdf_name"])
+        if sn in pa_seat_names:
+            pa_seat_to_session[sn] = ps["id"]
+
+    # Fetch NA approved stations
+    na_queue = conn.execute(
+        "SELECT name, form_data FROM polling_station_queue "
+        "WHERE session_id = ? AND status = 'approved' AND source = 'ecp'",
+        (target_session_id,)
+    ).fetchall()
+
+    station_num_re = re.compile(r'^Polling Station\s+(\d+)$')
+    na_data = {}
+    for row in na_queue:
+        m = station_num_re.match(row["name"])
+        if m:
+            na_data[int(m.group(1))] = json.loads(row["form_data"]) if row["form_data"] else {}
+
+    # Fetch PA approved stations for all relevant sessions in one query
+    pa_session_ids = list(pa_seat_to_session.values())
+    pa_data = {}  # (pa_seat_name, pa_num) -> form_data
+    if pa_session_ids:
+        placeholders = ",".join("?" * len(pa_session_ids))
+        pa_queue = conn.execute(
+            f"SELECT session_id, name, form_data FROM polling_station_queue "
+            f"WHERE session_id IN ({placeholders}) AND status = 'approved' AND source = 'ecp'",
+            pa_session_ids
+        ).fetchall()
+
+        # Reverse map: session_id -> seat_name
+        session_to_seat = {sid: sn for sn, sid in pa_seat_to_session.items()}
+        for row in pa_queue:
+            m = station_num_re.match(row["name"])
+            if m:
+                sn = session_to_seat.get(row["session_id"])
+                if sn:
+                    pa_data[(sn, int(m.group(1)))] = json.loads(row["form_data"]) if row["form_data"] else {}
+
+    conn.close()
+
+    # Build result
+    stations = []
+    for mr in match_rows:
+        na_num = mr["na_num"]
+        pa_seat = mr["pa_seat"]
+        pa_num = mr["pa_num"]
+
+        na_fd = na_data.get(na_num)
+        pa_fd = pa_data.get((pa_seat, pa_num))
+        if na_fd is None or pa_fd is None:
+            continue
+
+        na_turnout = _compute_turnout(na_fd)
+        pa_turnout = _compute_turnout(pa_fd)
+        if na_turnout is None or pa_turnout is None:
+            continue
+
+        stations.append({
+            "na_station_num": na_num,
+            "pa_seat_name": pa_seat,
+            "pa_station_num": pa_num,
+            "na_turnout": round(na_turnout, 4),
+            "pa_turnout": round(pa_turnout, 4),
+            "diff": round(abs(na_turnout - pa_turnout), 4),
+        })
+
+    stations.sort(key=lambda s: s["na_station_num"])
+
+    return {
+        "na_seat": seat_name,
+        "pa_seats": sorted(pa_seat_names),
+        "stations": stations,
     }
 
 
