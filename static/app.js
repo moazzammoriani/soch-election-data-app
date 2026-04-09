@@ -573,24 +573,30 @@ function renderQueueItem(ps, type) {
     if (type === 'pending') {
         return `
             <div class="queue-item${flaggedClass}${selectedClass}" data-id="${ps.id}">
-                <div class="queue-item-header">${checkboxHtml}${nameHtml}</div>
-                <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
-                <div class="queue-item-actions">
-                    <button class="view-pending-btn" data-id="${ps.id}">View</button>
-                    <button class="send-btn" data-id="${ps.id}">Send</button>
-                    <button class="danger delete-station-btn" data-id="${ps.id}">Delete</button>
+                ${checkboxHtml}
+                <div class="queue-item-content">
+                    <div class="queue-item-header">${nameHtml}</div>
+                    <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
+                    <div class="queue-item-actions">
+                        <button class="view-pending-btn" data-id="${ps.id}">View</button>
+                        <button class="send-btn" data-id="${ps.id}">Send</button>
+                        <button class="danger delete-station-btn" data-id="${ps.id}">Delete</button>
+                    </div>
                 </div>
             </div>
         `;
     } else if (type === 'processed') {
         return `
             <div class="queue-item${flaggedClass}${selectedClass}" data-id="${ps.id}">
-                <div class="queue-item-header">${checkboxHtml}${nameHtml}</div>
-                <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
-                ${flagsHtml}
-                <div class="queue-item-actions">
-                    <button class="verify-btn" data-id="${ps.id}">Verify</button>
-                    <button class="danger delete-station-btn" data-id="${ps.id}">Delete</button>
+                ${checkboxHtml}
+                <div class="queue-item-content">
+                    <div class="queue-item-header">${nameHtml}</div>
+                    <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
+                    ${flagsHtml}
+                    <div class="queue-item-actions">
+                        <button class="verify-btn" data-id="${ps.id}">Verify</button>
+                        <button class="danger delete-station-btn" data-id="${ps.id}">Delete</button>
+                    </div>
                 </div>
             </div>
         `;
@@ -606,12 +612,15 @@ function renderQueueItem(ps, type) {
             : '';
         return `
             <div class="queue-item${flaggedClass}${selectedClass}" data-id="${ps.id}">
-                <div class="queue-item-header">${checkboxHtml}${nameHtml}${sourceTag}${matchedTag}</div>
-                ${pagesText}
-                ${flagsHtml}
-                <div class="queue-item-actions">
-                    <button class="view-btn" data-id="${ps.id}">View</button>
-                    <button class="danger delete-station-btn" data-id="${ps.id}">Delete</button>
+                ${checkboxHtml}
+                <div class="queue-item-content">
+                    <div class="queue-item-header">${nameHtml}${sourceTag}${matchedTag}</div>
+                    ${pagesText}
+                    ${flagsHtml}
+                    <div class="queue-item-actions">
+                        <button class="view-btn" data-id="${ps.id}">View</button>
+                        <button class="danger delete-station-btn" data-id="${ps.id}">Delete</button>
+                    </div>
                 </div>
             </div>
         `;

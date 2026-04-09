@@ -606,6 +606,14 @@ input[type="text"] {
     border: 1px solid #e5e7eb;
     border-radius: 6px;
     padding: 12px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+.queue-item-content {
+    flex: 1;
+    min-width: 0;
 }
 
 .queue-item:hover {
@@ -618,9 +626,10 @@ input[type="text"] {
 }
 
 .queue-select-cb {
-    margin-right: 8px;
     cursor: pointer;
     accent-color: #3b82f6;
+    margin-top: 3px;
+    flex-shrink: 0;
 }
 
 .queue-item.flagged {
