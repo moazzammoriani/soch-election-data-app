@@ -22,6 +22,10 @@ let pollingStations = { pending: [], processed: [], approved: [] };
 let usedPages = new Set(); // Pages already in polling stations
 let pageLabels = null;
 let selectedStations = new Set(); // Multi-select in queues
+const openAccordions = new Set(JSON.parse(localStorage.getItem('openAccordions') || '[]'));
+function saveAccordionState() {
+    localStorage.setItem('openAccordions', JSON.stringify([...openAccordions]));
+}
 
 // DOM Elements
 const dashboardSection = document.getElementById('dashboard-section');
@@ -160,8 +164,10 @@ function renderSessionsList(sessions) {
         for (const seat of seatOrder) {
             if (!seatTypes[seat]) continue;
             const cards = seatTypes[seat].map(renderSessionCard).join('');
+            const seatKey = `${prov}>${seat}`;
+            const seatOpen = openAccordions.has(seatKey) ? ' open' : '';
             seatHtml += `
-                <div class="accordion seat-accordion">
+                <div class="accordion seat-accordion${seatOpen}" data-accordion-key="${seatKey}">
                     <div class="accordion-header">
                         <span>${seat} <span class="accordion-count">(${seatTypes[seat].length})</span></span>
                         <span class="accordion-arrow">&#9654;</span>
@@ -175,8 +181,9 @@ function renderSessionsList(sessions) {
             seatHtml = '<p class="accordion-empty">No sessions</p>';
         }
 
+        const provOpen = openAccordions.has(prov) ? ' open' : '';
         html += `
-            <div class="accordion province-accordion">
+            <div class="accordion province-accordion${provOpen}" data-accordion-key="${prov}">
                 <div class="accordion-header">
                     <span>${prov} <span class="accordion-count">(${provCount})</span></span>
                     <span class="accordion-arrow">&#9654;</span>
@@ -210,6 +217,15 @@ sessionsList.addEventListener('click', (e) => {
     if (e.target.closest('.session-card')) return;
     const accordion = header.parentElement;
     accordion.classList.toggle('open');
+    const key = accordion.dataset.accordionKey;
+    if (key) {
+        if (accordion.classList.contains('open')) {
+            openAccordions.add(key);
+        } else {
+            openAccordions.delete(key);
+        }
+        saveAccordionState();
+    }
 });
 
 async function switchToSession(sessionId) {
@@ -1958,7 +1974,7 @@ function renderNaPaTurnoutDiffChart(data) {
     if (!data.stations || data.stations.length === 0) return;
 
     const labels = data.stations.map(s => s.na_station_num);
-    const diffs = data.stations.map(s => Math.round(s.diff * 100 * 10) / 10);
+    const diffs = data.stations.map(s => s.diff);
 
     const ctx = document.getElementById('na-pa-turnout-diff-chart').getContext('2d');
     naPaTurnoutDiffChart = new Chart(ctx, {
@@ -1980,11 +1996,9 @@ function renderNaPaTurnoutDiffChart(data) {
                         title: (items) => `NA Station ${items[0].label}`,
                         label: (ctx) => {
                             const station = data.stations[ctx.dataIndex];
-                            const naPct = (station.na_turnout * 100).toFixed(1);
-                            const paPct = (station.pa_turnout * 100).toFixed(1);
                             return [
-                                `Diff: ${ctx.parsed.y.toFixed(1)} pp`,
-                                `NA: ${naPct}% | PA (${station.pa_seat_name} #${station.pa_station_num}): ${paPct}%`,
+                                `Diff: ${ctx.parsed.y} votes`,
+                                `NA: ${station.na_turnout} | PA (${station.pa_seat_name} #${station.pa_station_num}): ${station.pa_turnout}`,
                             ];
                         },
                     },
@@ -1994,7 +2008,7 @@ function renderNaPaTurnoutDiffChart(data) {
                 x: { title: { display: true, text: 'Polling Station Number' } },
                 y: {
                     beginAtZero: true,
-                    title: { display: true, text: 'Turnout Difference (pp)' },
+                    title: { display: true, text: 'Votes Cast Difference' },
                 },
             },
         },

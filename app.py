@@ -660,6 +660,13 @@ def _compute_turnout(form_data: dict) -> Optional[float]:
     registered = form_data.get("total_registered_voters", {}).get("value") or 0
     return (votes_cast / registered) if registered else None
 
+def _votes_cast(form_data: dict) -> Optional[int]:
+    """Get raw votes cast from form data."""
+    row_a = form_data.get("row_a", {}).get("value") or 0
+    row_d = form_data.get("row_d", {}).get("value") or 0
+    votes_cast = row_a if row_a else row_d
+    return votes_cast if votes_cast else None
+
 
 @app.get("/api/sessions/{target_session_id}/na-pa-turnout-diff")
 async def get_na_pa_turnout_diff(target_session_id: str):
@@ -749,18 +756,18 @@ async def get_na_pa_turnout_diff(target_session_id: str):
         if na_fd is None or pa_fd is None:
             continue
 
-        na_turnout = _compute_turnout(na_fd)
-        pa_turnout = _compute_turnout(pa_fd)
-        if na_turnout is None or pa_turnout is None:
+        na_votes = _votes_cast(na_fd)
+        pa_votes = _votes_cast(pa_fd)
+        if na_votes is None or pa_votes is None:
             continue
 
         stations.append({
             "na_station_num": na_num,
             "pa_seat_name": pa_seat,
             "pa_station_num": pa_num,
-            "na_turnout": round(na_turnout, 4),
-            "pa_turnout": round(pa_turnout, 4),
-            "diff": round(abs(na_turnout - pa_turnout), 4),
+            "na_turnout": na_votes,
+            "pa_turnout": pa_votes,
+            "diff": abs(na_votes - pa_votes),
         })
 
     stations.sort(key=lambda s: s["na_station_num"])
