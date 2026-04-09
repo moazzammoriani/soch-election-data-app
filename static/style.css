@@ -612,6 +612,17 @@ input[type="text"] {
     border-color: #2563eb;
 }
 
+.queue-item.selected {
+    background: #eff6ff;
+    border-color: #3b82f6;
+}
+
+.queue-select-cb {
+    margin-right: 8px;
+    cursor: pointer;
+    accent-color: #3b82f6;
+}
+
 .queue-item.flagged {
     background: #fef2f2;
     border-color: #f87171;

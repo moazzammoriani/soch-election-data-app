@@ -21,6 +21,7 @@ let currentStationStatus = null; // 'pending', 'processed', or 'approved'
 let pollingStations = { pending: [], processed: [], approved: [] };
 let usedPages = new Set(); // Pages already in polling stations
 let pageLabels = null;
+let selectedStations = new Set(); // Multi-select in queues
 
 // DOM Elements
 const dashboardSection = document.getElementById('dashboard-section');
@@ -557,19 +558,22 @@ function formatFlag(flag) {
 }
 
 function renderQueueItem(ps, type) {
+    const checked = selectedStations.has(ps.id) ? 'checked' : '';
+    const checkboxHtml = `<input type="checkbox" class="queue-select-cb" data-id="${ps.id}" ${checked}>`;
     const nameHtml = `
         <span class="queue-item-name" data-id="${ps.id}">${ps.name}</span>
         <button class="rename-btn" data-id="${ps.id}" title="Rename">✎</button>
     `;
     const flaggedClass = ps.flags && ps.flags.length > 0 ? ' flagged' : '';
+    const selectedClass = selectedStations.has(ps.id) ? ' selected' : '';
     const flagsHtml = ps.flags && ps.flags.length > 0
         ? `<div class="queue-item-flags">${ps.flags.map(f => `<span class="flag-reason">${formatFlag(f)}</span>`).join('')}</div>`
         : '';
 
     if (type === 'pending') {
         return `
-            <div class="queue-item${flaggedClass}" data-id="${ps.id}">
-                <div class="queue-item-header">${nameHtml}</div>
+            <div class="queue-item${flaggedClass}${selectedClass}" data-id="${ps.id}">
+                <div class="queue-item-header">${checkboxHtml}${nameHtml}</div>
                 <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
                 <div class="queue-item-actions">
                     <button class="view-pending-btn" data-id="${ps.id}">View</button>
@@ -580,8 +584,8 @@ function renderQueueItem(ps, type) {
         `;
     } else if (type === 'processed') {
         return `
-            <div class="queue-item${flaggedClass}" data-id="${ps.id}">
-                <div class="queue-item-header">${nameHtml}</div>
+            <div class="queue-item${flaggedClass}${selectedClass}" data-id="${ps.id}">
+                <div class="queue-item-header">${checkboxHtml}${nameHtml}</div>
                 <div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>
                 ${flagsHtml}
                 <div class="queue-item-actions">
@@ -601,8 +605,8 @@ function renderQueueItem(ps, type) {
             ? `<div class="queue-item-pages">Pages: ${ps.pages.map(p => p + 1).join(', ')}</div>`
             : '';
         return `
-            <div class="queue-item${flaggedClass}" data-id="${ps.id}">
-                <div class="queue-item-header">${nameHtml}${sourceTag}${matchedTag}</div>
+            <div class="queue-item${flaggedClass}${selectedClass}" data-id="${ps.id}">
+                <div class="queue-item-header">${checkboxHtml}${nameHtml}${sourceTag}${matchedTag}</div>
                 ${pagesText}
                 ${flagsHtml}
                 <div class="queue-item-actions">
@@ -706,7 +710,78 @@ document.getElementById('renumber-btn').addEventListener('click', async () => {
     }
 });
 
+function attachQueueCheckboxListeners(container) {
+    container.querySelectorAll('.queue-select-cb').forEach(cb => {
+        cb.addEventListener('change', () => {
+            const id = parseInt(cb.dataset.id);
+            const item = cb.closest('.queue-item');
+            if (cb.checked) {
+                selectedStations.add(id);
+                item.classList.add('selected');
+            } else {
+                selectedStations.delete(id);
+                item.classList.remove('selected');
+            }
+            updateSelectionButtons();
+        });
+    });
+}
+
+function getSelectedInQueue(status) {
+    const key = status === 'processed' ? 'processed' : status;
+    const queueIds = new Set(pollingStations[key].map(ps => ps.id));
+    return [...selectedStations].filter(id => queueIds.has(id));
+}
+
+function updateSelectionButtons() {
+    const pendingSel = getSelectedInQueue('pending');
+    const processedSel = getSelectedInQueue('processed');
+    const approvedSel = getSelectedInQueue('approved');
+
+    const deleteAllPendingBtn = document.getElementById('delete-all-pending-btn');
+    const deleteAllProcessedBtn = document.getElementById('delete-all-processed-btn');
+    const deleteAllApprovedBtn = document.getElementById('delete-all-approved-btn');
+
+    if (pollingStations.pending.length > 0) {
+        if (pendingSel.length > 0) {
+            batchProcessBtn.textContent = `Process Selected (${pendingSel.length})`;
+            deleteAllPendingBtn.textContent = `Delete Selected (${pendingSel.length})`;
+        } else {
+            batchProcessBtn.textContent = 'Process All';
+            deleteAllPendingBtn.textContent = 'Delete All';
+        }
+    }
+
+    if (pollingStations.processed.length > 0) {
+        if (processedSel.length > 0) {
+            bulkApproveBtn.textContent = `Approve Selected (${processedSel.length})`;
+            deleteAllProcessedBtn.textContent = `Delete Selected (${processedSel.length})`;
+        } else {
+            bulkApproveBtn.textContent = 'Approve All';
+            deleteAllProcessedBtn.textContent = 'Delete All';
+        }
+    }
+
+    if (pollingStations.approved.length > 0) {
+        if (approvedSel.length > 0) {
+            deleteAllApprovedBtn.textContent = `Delete Selected (${approvedSel.length})`;
+        } else {
+            deleteAllApprovedBtn.textContent = 'Delete All';
+        }
+    }
+}
+
 function renderQueues() {
+    // Prune selectedStations: remove IDs that no longer exist in any queue
+    const allIds = new Set([
+        ...pollingStations.pending.map(ps => ps.id),
+        ...pollingStations.processed.map(ps => ps.id),
+        ...pollingStations.approved.map(ps => ps.id),
+    ]);
+    for (const id of selectedStations) {
+        if (!allIds.has(id)) selectedStations.delete(id);
+    }
+
     // Pending queue
     const deleteAllPendingBtn = document.getElementById('delete-all-pending-btn');
     if (pollingStations.pending.length === 0) {
@@ -729,6 +804,7 @@ function renderQueues() {
             btn.addEventListener('click', () => deletePollingStation(parseInt(btn.dataset.id)));
         });
         attachRenameListeners(pendingList);
+        attachQueueCheckboxListeners(pendingList);
     }
 
     // Done queue
@@ -750,6 +826,7 @@ function renderQueues() {
             btn.addEventListener('click', () => deletePollingStation(parseInt(btn.dataset.id)));
         });
         attachRenameListeners(doneList);
+        attachQueueCheckboxListeners(doneList);
     }
 
     // Approved queue
@@ -769,7 +846,10 @@ function renderQueues() {
             btn.addEventListener('click', () => deletePollingStation(parseInt(btn.dataset.id)));
         });
         attachRenameListeners(approvedList);
+        attachQueueCheckboxListeners(approvedList);
     }
+
+    updateSelectionButtons();
 }
 
 // --- Page Selection ---
@@ -1159,6 +1239,7 @@ async function processSingleStation(stationId) {
 }
 
 batchProcessBtn.addEventListener('click', async () => {
+    const selectedIds = getSelectedInQueue('pending');
     batchProcessBtn.disabled = true;
     batchProcessBtn.textContent = 'Processing...';
 
@@ -1169,10 +1250,12 @@ batchProcessBtn.addEventListener('click', async () => {
     });
 
     try {
+        const body = { ...getAIProvider() };
+        if (selectedIds.length > 0) body.ids = selectedIds;
         const res = await fetch('/api/polling-stations/batch-process', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(getAIProvider()),
+            body: JSON.stringify(body),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail);
@@ -1181,6 +1264,7 @@ batchProcessBtn.addEventListener('click', async () => {
             alert(`Some stations failed to process: ${data.errors.map(e => e.error).join(', ')}`);
         }
 
+        if (selectedIds.length > 0) selectedIds.forEach(id => selectedStations.delete(id));
         await loadPollingStations();
         renderPageThumbnails();
         updateProgress();
@@ -1193,14 +1277,21 @@ batchProcessBtn.addEventListener('click', async () => {
 });
 
 bulkApproveBtn.addEventListener('click', async () => {
-    const count = pollingStations.processed.length;
-    if (!confirm(`Approve all ${count} stations with their current extracted data?`)) return;
+    const selectedIds = getSelectedInQueue('processed');
+    const count = selectedIds.length > 0 ? selectedIds.length : pollingStations.processed.length;
+    const label = selectedIds.length > 0 ? `${count} selected` : `all ${count}`;
+    if (!confirm(`Approve ${label} stations with their current extracted data?`)) return;
 
     bulkApproveBtn.disabled = true;
     bulkApproveBtn.textContent = 'Approving...';
 
     try {
-        const res = await fetch('/api/polling-stations/bulk-approve', { method: 'POST' });
+        const body = selectedIds.length > 0 ? { ids: selectedIds } : {};
+        const res = await fetch('/api/polling-stations/bulk-approve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail);
 
@@ -1323,6 +1414,27 @@ async function deletePollingStation(stationId) {
 }
 
 async function deleteAllByStatus(status) {
+    const selectedIds = getSelectedInQueue(status);
+    if (selectedIds.length > 0) {
+        if (!confirm(`Delete ${selectedIds.length} selected ${status} polling stations?`)) return;
+        try {
+            const res = await fetch('/api/polling-stations/batch-delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: selectedIds }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail);
+            selectedIds.forEach(id => selectedStations.delete(id));
+            await loadPollingStations();
+            renderPageThumbnails();
+            updateProgress();
+        } catch (err) {
+            alert(`Error: ${err.message}`);
+        }
+        return;
+    }
+
     const count = pollingStations[status].length;
     if (!count) return;
     if (!confirm(`Delete all ${count} ${status} polling stations?`)) return;

@@ -436,6 +436,10 @@ class BatchCreatePollingStationsRequest(BaseModel):
 class AIProviderRequest(BaseModel):
     provider: str = "openrouter"
     model: str = "google/gemini-3-flash-preview"
+    ids: Optional[list[int]] = None
+
+class BulkActionRequest(BaseModel):
+    ids: Optional[list[int]] = None
 
 
 class PageGuesses(BaseModel):
@@ -1642,6 +1646,48 @@ async def delete_all_by_status(status: str, session_id: Optional[str] = Cookie(d
     return {"deleted": len(rows)}
 
 
+@app.post("/api/polling-stations/batch-delete")
+async def batch_delete_polling_stations(req: BulkActionRequest, session_id: Optional[str] = Cookie(default=None)):
+    """Delete specific polling stations by IDs."""
+    if not session_id:
+        raise HTTPException(400, "No session")
+    if not req.ids:
+        return {"deleted": 0}
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    placeholders = ','.join('?' * len(req.ids))
+    rows = conn.execute(
+        f"SELECT id, pages, status FROM polling_station_queue WHERE session_id = ? AND id IN ({placeholders})",
+        (session_id, *req.ids)
+    ).fetchall()
+
+    if not rows:
+        conn.close()
+        return {"deleted": 0}
+
+    # If deleting approved stations, update processed_pages
+    approved_pages = set()
+    for row in rows:
+        if row["status"] == "approved":
+            approved_pages.update(json.loads(row["pages"]))
+    if approved_pages:
+        session = get_session(session_id)
+        processed = set(session["processed_pages"])
+        processed.difference_update(approved_pages)
+        update_session(session_id, processed_pages=list(processed))
+
+    ids_to_delete = [r["id"] for r in rows]
+    conn.execute(
+        f"DELETE FROM polling_station_queue WHERE id IN ({','.join('?' * len(ids_to_delete))})",
+        ids_to_delete
+    )
+    conn.commit()
+    conn.close()
+
+    return {"deleted": len(ids_to_delete)}
+
+
 @app.patch("/api/polling-station/{station_id}")
 async def rename_polling_station(station_id: int, req: RenamePollingStationRequest, session_id: Optional[str] = Cookie(default=None)):
     """Rename a polling station. Name must be unique within the session."""
@@ -1873,10 +1919,17 @@ async def batch_process_polling_stations(req: AIProviderRequest = AIProviderRequ
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT id FROM polling_station_queue WHERE session_id = ? AND status = 'pending'",
-        (session_id,)
-    ).fetchall()
+    if req.ids:
+        placeholders = ','.join('?' * len(req.ids))
+        rows = conn.execute(
+            f"SELECT id FROM polling_station_queue WHERE session_id = ? AND status = 'pending' AND id IN ({placeholders})",
+            (session_id, *req.ids)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id FROM polling_station_queue WHERE session_id = ? AND status = 'pending'",
+            (session_id,)
+        ).fetchall()
     conn.close()
 
     if not rows:
@@ -1945,17 +1998,24 @@ async def approve_polling_station(station_id: int, req: ApprovePollingStationReq
 
 
 @app.post("/api/polling-stations/bulk-approve")
-async def bulk_approve_polling_stations(session_id: Optional[str] = Cookie(default=None)):
-    """Approve all processed polling stations with their current form data."""
+async def bulk_approve_polling_stations(req: BulkActionRequest = BulkActionRequest(), session_id: Optional[str] = Cookie(default=None)):
+    """Approve all (or selected) processed polling stations with their current form data."""
     if not session_id:
         raise HTTPException(400, "No session")
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT id, pages FROM polling_station_queue WHERE session_id = ? AND status = 'processed'",
-        (session_id,)
-    ).fetchall()
+    if req.ids:
+        placeholders = ','.join('?' * len(req.ids))
+        rows = conn.execute(
+            f"SELECT id, pages FROM polling_station_queue WHERE session_id = ? AND status = 'processed' AND id IN ({placeholders})",
+            (session_id, *req.ids)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, pages FROM polling_station_queue WHERE session_id = ? AND status = 'processed'",
+            (session_id,)
+        ).fetchall()
 
     if not rows:
         conn.close()
