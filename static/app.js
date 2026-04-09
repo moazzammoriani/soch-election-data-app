@@ -719,18 +719,44 @@ document.getElementById('renumber-btn').addEventListener('click', async () => {
     }
 });
 
+let lastCheckedCb = null;
+
 function attachQueueCheckboxListeners(container) {
-    container.querySelectorAll('.queue-select-cb').forEach(cb => {
-        cb.addEventListener('change', () => {
-            const id = parseInt(cb.dataset.id);
-            const item = cb.closest('.queue-item');
-            if (cb.checked) {
-                selectedStations.add(id);
-                item.classList.add('selected');
+    const checkboxes = [...container.querySelectorAll('.queue-select-cb')];
+    checkboxes.forEach(cb => {
+        cb.addEventListener('click', (e) => {
+            if (e.shiftKey && lastCheckedCb && lastCheckedCb !== cb) {
+                // Find all checkboxes across all queues in DOM order
+                const allCbs = [...document.querySelectorAll('.queue-select-cb')];
+                const startIdx = allCbs.indexOf(lastCheckedCb);
+                const endIdx = allCbs.indexOf(cb);
+                const from = Math.min(startIdx, endIdx);
+                const to = Math.max(startIdx, endIdx);
+                const checked = cb.checked;
+                for (let i = from; i <= to; i++) {
+                    allCbs[i].checked = checked;
+                    const id = parseInt(allCbs[i].dataset.id);
+                    const item = allCbs[i].closest('.queue-item');
+                    if (checked) {
+                        selectedStations.add(id);
+                        item.classList.add('selected');
+                    } else {
+                        selectedStations.delete(id);
+                        item.classList.remove('selected');
+                    }
+                }
             } else {
-                selectedStations.delete(id);
-                item.classList.remove('selected');
+                const id = parseInt(cb.dataset.id);
+                const item = cb.closest('.queue-item');
+                if (cb.checked) {
+                    selectedStations.add(id);
+                    item.classList.add('selected');
+                } else {
+                    selectedStations.delete(id);
+                    item.classList.remove('selected');
+                }
             }
+            lastCheckedCb = cb;
             updateSelectionButtons();
         });
     });
