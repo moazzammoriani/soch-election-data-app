@@ -6,6 +6,7 @@
     <title>Election Form Processor</title>
     <link rel="stylesheet" href="/static/style.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@sgratzl/chartjs-chart-boxplot@4"></script>
 </head>
 <body>
     <div id="app">
@@ -205,6 +206,7 @@
                 <button class="chart-tab" data-tab="turnout-by-station">Turnout by Station</button>
                 <button class="chart-tab" data-tab="na-pa-turnout-diff">NA-PA Turnout Diff</button>
                 <button class="chart-tab" data-tab="na-pa-diff-hist">NA-PA Diff Distribution</button>
+                <button class="chart-tab" data-tab="na-pa-turnout-violin">NA-PA Turnout Violin</button>
             </div>
             <div id="chart-container">
                 <div id="chart-votes">
@@ -226,6 +228,7 @@
                 <div id="chart-turnout-by-station" class="hidden"><canvas id="turnout-by-station-chart"></canvas></div>
                 <div id="chart-na-pa-turnout-diff" class="hidden"><canvas id="na-pa-turnout-diff-chart"></canvas></div>
                 <div id="chart-na-pa-diff-hist" class="hidden"><canvas id="na-pa-diff-hist-chart"></canvas></div>
+                <div id="chart-na-pa-turnout-violin" class="hidden"><canvas id="na-pa-turnout-violin-chart"></canvas></div>
             </div>
         </section>
 

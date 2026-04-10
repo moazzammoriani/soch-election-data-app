@@ -697,7 +697,17 @@ async def get_na_pa_turnout_diff(target_session_id: str):
 
     seat_name = normalize_seat_name(session.get("pdf_name"))
     if not seat_name or not seat_name.startswith("na_"):
-        return {"na_seat": seat_name, "pa_seats": [], "stations": []}
+        return {"na_seat": seat_name, "pa_seats": [], "candidates": [], "stations": []}
+
+    # Load candidate field names for winner determination (mirrors get_chart_data)
+    if session.get("candidate_1") and session.get("candidate_2"):
+        c1_name = session["candidate_1"]["name"]
+        c2_name = session["candidate_2"]["name"]
+        c1_field = c1_name.lower().replace(" ", "_") + "_col3"
+        c2_field = c2_name.lower().replace(" ", "_") + "_col3"
+    else:
+        c1_name = c2_name = None
+        c1_field = c2_field = None
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -781,6 +791,19 @@ async def get_na_pa_turnout_diff(target_session_id: str):
         if na_votes is None or pa_votes is None:
             continue
 
+        na_turnout_pct = _compute_turnout(na_fd)
+        pa_turnout_pct = _compute_turnout(pa_fd)
+
+        # Winner index: 0 = c1, 1 = c2, None if tied or schema missing.
+        winner_idx = None
+        if c1_field and c2_field:
+            c1_val = na_fd.get(c1_field, {}).get("value") or 0
+            c2_val = na_fd.get(c2_field, {}).get("value") or 0
+            if c1_val > c2_val:
+                winner_idx = 0
+            elif c2_val > c1_val:
+                winner_idx = 1
+
         stations.append({
             "na_station_num": na_num,
             "pa_seat_name": pa_seat,
@@ -788,6 +811,9 @@ async def get_na_pa_turnout_diff(target_session_id: str):
             "na_turnout": na_votes,
             "pa_turnout": pa_votes,
             "diff": abs(na_votes - pa_votes),
+            "na_turnout_pct": na_turnout_pct,
+            "pa_turnout_pct": pa_turnout_pct,
+            "winner_idx": winner_idx,
         })
 
     stations.sort(key=lambda s: s["na_station_num"])
@@ -795,6 +821,7 @@ async def get_na_pa_turnout_diff(target_session_id: str):
     return {
         "na_seat": seat_name,
         "pa_seats": sorted(pa_seat_names),
+        "candidates": [c1_name, c2_name] if c1_name and c2_name else [],
         "stations": stations,
     }
 

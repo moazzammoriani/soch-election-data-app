@@ -1756,6 +1756,7 @@ let winnerScatterChart = null;
 let turnoutByStationChart = null;
 let naPaTurnoutDiffChart = null;
 let naPaDiffHistChart = null;
+let naPaTurnoutViolinChart = null;
 let naPaTurnoutDiffData = null;
 let chartData = null;
 let chartSessionId = null;
@@ -1768,6 +1769,7 @@ function destroyCharts() {
     if (turnoutByStationChart) { turnoutByStationChart.destroy(); turnoutByStationChart = null; }
     if (naPaTurnoutDiffChart) { naPaTurnoutDiffChart.destroy(); naPaTurnoutDiffChart = null; }
     if (naPaDiffHistChart) { naPaDiffHistChart.destroy(); naPaDiffHistChart = null; }
+    if (naPaTurnoutViolinChart) { naPaTurnoutViolinChart.destroy(); naPaTurnoutViolinChart = null; }
     naPaTurnoutDiffData = null;
 }
 
@@ -2124,6 +2126,88 @@ function renderNaPaDiffHistChart(data) {
     });
 }
 
+function renderNaPaTurnoutViolinChart(data) {
+    if (naPaTurnoutViolinChart) { naPaTurnoutViolinChart.destroy(); naPaTurnoutViolinChart = null; }
+    if (!data.stations || data.stations.length === 0) return;
+    if (!data.candidates || data.candidates.length < 2) return;
+
+    const [c1Name, c2Name] = data.candidates;
+
+    // Group matched-pair stations by NA winner index.
+    const groups = {
+        0: { na: [], pa: [] },
+        1: { na: [], pa: [] },
+    };
+    for (const s of data.stations) {
+        if (s.winner_idx !== 0 && s.winner_idx !== 1) continue;
+        if (s.na_turnout_pct == null || s.pa_turnout_pct == null) continue;
+        groups[s.winner_idx].na.push(s.na_turnout_pct * 100);
+        groups[s.winner_idx].pa.push(s.pa_turnout_pct * 100);
+    }
+
+    const labels = [c1Name, c2Name];
+    const naData = [groups[0].na, groups[1].na];
+    const paData = [groups[0].pa, groups[1].pa];
+
+    const ctx = document.getElementById('na-pa-turnout-violin-chart').getContext('2d');
+    naPaTurnoutViolinChart = new Chart(ctx, {
+        type: 'violin',
+        data: {
+            labels,
+            datasets: [
+                {
+                    label: 'NA Turnout',
+                    data: naData,
+                    backgroundColor: 'rgba(20, 150, 160, 0.55)',
+                    borderColor: 'rgba(20, 150, 160, 1)',
+                    borderWidth: 1,
+                    itemRadius: 2,
+                    itemStyle: 'circle',
+                    itemBackgroundColor: 'rgba(20, 150, 160, 0.8)',
+                },
+                {
+                    label: 'PA Turnout',
+                    data: paData,
+                    backgroundColor: 'rgba(220, 100, 120, 0.55)',
+                    borderColor: 'rgba(220, 100, 120, 1)',
+                    borderWidth: 1,
+                    itemRadius: 2,
+                    itemStyle: 'circle',
+                    itemBackgroundColor: 'rgba(220, 100, 120, 0.8)',
+                },
+            ],
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: true, position: 'top' },
+                tooltip: {
+                    callbacks: {
+                        title: (items) => items[0].label,
+                        label: (ctx) => {
+                            const stats = ctx.parsed;
+                            const fmt = (v) => (typeof v === 'number' ? v.toFixed(1) : '?');
+                            const n = stats.items ? stats.items.length : '?';
+                            return [
+                                `${ctx.dataset.label}: n=${n}`,
+                                `min=${fmt(stats.min)}  q1=${fmt(stats.q1)}  median=${fmt(stats.median)}  q3=${fmt(stats.q3)}  max=${fmt(stats.max)}`,
+                            ];
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: { title: { display: true, text: 'Winning Candidate' } },
+                y: {
+                    beginAtZero: true,
+                    max: 100,
+                    title: { display: true, text: 'Turnout Percentage (%)' },
+                },
+            },
+        },
+    });
+}
+
 async function fetchNaPaTurnoutDiff(sessionId) {
     try {
         const res = await fetch(`/api/sessions/${sessionId}/na-pa-turnout-diff`);
@@ -2133,6 +2217,8 @@ async function fetchNaPaTurnoutDiff(sessionId) {
         const activeTab = document.querySelector('.chart-tab.active')?.dataset.tab;
         if (activeTab === 'na-pa-diff-hist') {
             renderNaPaDiffHistChart(data);
+        } else if (activeTab === 'na-pa-turnout-violin') {
+            renderNaPaTurnoutViolinChart(data);
         } else {
             renderNaPaTurnoutDiffChart(data);
         }
@@ -2150,6 +2236,7 @@ function switchChartTab(tab) {
     document.getElementById('chart-turnout-by-station').classList.toggle('hidden', tab !== 'turnout-by-station');
     document.getElementById('chart-na-pa-turnout-diff').classList.toggle('hidden', tab !== 'na-pa-turnout-diff');
     document.getElementById('chart-na-pa-diff-hist').classList.toggle('hidden', tab !== 'na-pa-diff-hist');
+    document.getElementById('chart-na-pa-turnout-violin').classList.toggle('hidden', tab !== 'na-pa-turnout-violin');
 
     const titleBase = chartData ? chartData.pdf_name : '';
     if (tab === 'votes') {
@@ -2178,6 +2265,13 @@ function switchChartTab(tab) {
         document.getElementById('chart-title').textContent = `NA-PA Diff Distribution — ${titleBase}`;
         if (naPaTurnoutDiffData) {
             renderNaPaDiffHistChart(naPaTurnoutDiffData);
+        } else if (chartSessionId) {
+            fetchNaPaTurnoutDiff(chartSessionId);
+        }
+    } else if (tab === 'na-pa-turnout-violin') {
+        document.getElementById('chart-title').textContent = `NA-PA Turnout Violin — ${titleBase}`;
+        if (naPaTurnoutDiffData) {
+            renderNaPaTurnoutViolinChart(naPaTurnoutDiffData);
         } else if (chartSessionId) {
             fetchNaPaTurnoutDiff(chartSessionId);
         }
@@ -2217,6 +2311,7 @@ async function openCharts(sessionId, source = 'ecp', tab = null) {
         const naOnlyTabs = [
             '.chart-tab[data-tab="na-pa-turnout-diff"]',
             '.chart-tab[data-tab="na-pa-diff-hist"]',
+            '.chart-tab[data-tab="na-pa-turnout-violin"]',
         ];
         naOnlyTabs.forEach(sel => {
             const el = document.querySelector(sel);
@@ -2225,7 +2320,8 @@ async function openCharts(sessionId, source = 'ecp', tab = null) {
 
         // Use provided tab or default to votes
         let activeTab = tab || document.querySelector('.chart-tab.active')?.dataset.tab || 'votes';
-        if ((activeTab === 'na-pa-turnout-diff' || activeTab === 'na-pa-diff-hist') && data.seat_type !== 'National') {
+        const naOnlyActiveTabs = ['na-pa-turnout-diff', 'na-pa-diff-hist', 'na-pa-turnout-violin'];
+        if (naOnlyActiveTabs.includes(activeTab) && data.seat_type !== 'National') {
             activeTab = 'votes';
         }
         switchChartTab(activeTab);
