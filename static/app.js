@@ -131,7 +131,7 @@ function renderSessionCard(s) {
             <div class="session-actions">
                 <button class="continue-btn" data-id="${s.id}">Continue</button>
                 ${s.step === 'process' ? `<button class="chart-btn" data-id="${s.id}">Charts</button>` : ''}
-                <button class="rename-btn" data-id="${s.id}" data-name="${(s.pdf_name || '').replace(/"/g, '&quot;')}">Rename</button>
+                <button class="session-rename-btn" data-id="${s.id}" data-name="${(s.pdf_name || '').replace(/"/g, '&quot;')}" title="Rename session">&#9998;</button>
                 <button class="danger delete-btn" data-id="${s.id}">Delete</button>
             </div>
         </div>
@@ -210,7 +210,7 @@ function renderSessionsList(sessions) {
         btn.addEventListener('click', () => openCharts(btn.dataset.id));
     });
 
-    sessionsList.querySelectorAll('.rename-btn').forEach(btn => {
+    sessionsList.querySelectorAll('.session-rename-btn').forEach(btn => {
         btn.addEventListener('click', () => renameSession(btn.dataset.id, btn.dataset.name));
     });
 }
