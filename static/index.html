@@ -18,6 +18,8 @@
                     <button id="new-session-btn">+ New Session</button>
                     <button id="bulk-upload-btn">Bulk Upload</button>
                     <input type="file" id="bulk-upload-input" accept=".pdf" multiple class="hidden">
+                    <button id="import-csv-btn" title="Create a session from an exported CSV">Import CSV</button>
+                    <input type="file" id="import-csv-input" accept=".csv" class="hidden">
                     <button id="import-scheme-btn" title="Replace polling scheme mapping">Import Scheme</button>
                     <input type="file" id="import-scheme-input" accept=".json" class="hidden">
                     <button id="ai-settings-btn" title="AI Provider Settings">&#9881;</button>
@@ -239,6 +241,32 @@
             <p>All pages have been processed.</p>
             <button id="view-results-btn">View Results</button>
         </section>
+    </div>
+
+    <!-- Import CSV Modal -->
+    <div id="import-csv-modal" class="modal hidden">
+        <div class="modal-content ai-settings-content">
+            <h3>Import Session from CSV</h3>
+            <p id="import-csv-filename" class="schema-pdf-info"></p>
+            <label for="import-csv-seat-type">Seat Type</label>
+            <select id="import-csv-seat-type">
+                <option value="">Select type</option>
+                <option value="National">National</option>
+                <option value="Provincial">Provincial</option>
+            </select>
+            <label for="import-csv-province">Province</label>
+            <select id="import-csv-province">
+                <option value="">Select province</option>
+                <option value="Punjab">Punjab</option>
+                <option value="Sindh">Sindh</option>
+                <option value="KPK">KPK</option>
+                <option value="Balochistan">Balochistan</option>
+            </select>
+            <div class="modal-actions">
+                <button id="import-csv-submit">Import</button>
+                <button id="import-csv-cancel" class="secondary">Cancel</button>
+            </div>
+        </div>
     </div>
 
     <!-- AI Settings Modal -->

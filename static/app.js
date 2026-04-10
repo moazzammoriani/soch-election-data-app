@@ -348,6 +348,78 @@ importSchemeInput.addEventListener('change', async () => {
     }
 });
 
+// --- Import CSV (create a session from a previously-exported CSV) ---
+const importCsvBtn = document.getElementById('import-csv-btn');
+const importCsvInput = document.getElementById('import-csv-input');
+const importCsvModal = document.getElementById('import-csv-modal');
+const importCsvFilename = document.getElementById('import-csv-filename');
+const importCsvProvince = document.getElementById('import-csv-province');
+const importCsvSeatType = document.getElementById('import-csv-seat-type');
+const importCsvSubmit = document.getElementById('import-csv-submit');
+const importCsvCancel = document.getElementById('import-csv-cancel');
+
+let pendingCsvFile = null;
+
+importCsvBtn.addEventListener('click', () => importCsvInput.click());
+
+importCsvInput.addEventListener('change', () => {
+    const file = importCsvInput.files[0];
+    if (!file) return;
+    pendingCsvFile = file;
+    importCsvFilename.textContent = file.name;
+
+    // Pre-fill seat type by matching the first seat-code token in the filename.
+    const lname = file.name.toLowerCase();
+    if (/(^|[^a-z])na[-_ ]?\d/.test(lname)) {
+        importCsvSeatType.value = 'National';
+    } else if (/(^|[^a-z])(pp|ps|pk|pb)[-_ ]?\d/.test(lname)) {
+        importCsvSeatType.value = 'Provincial';
+    } else {
+        importCsvSeatType.value = '';
+    }
+    importCsvProvince.value = '';
+    importCsvModal.classList.remove('hidden');
+});
+
+function closeImportCsvModal() {
+    importCsvModal.classList.add('hidden');
+    importCsvInput.value = '';
+    pendingCsvFile = null;
+}
+
+importCsvCancel.addEventListener('click', closeImportCsvModal);
+
+importCsvSubmit.addEventListener('click', async () => {
+    if (!pendingCsvFile) return;
+    const province = importCsvProvince.value;
+    const seatType = importCsvSeatType.value;
+    if (!province || !seatType) {
+        alert('Please select both province and seat type.');
+        return;
+    }
+
+    const originalText = importCsvSubmit.textContent;
+    importCsvSubmit.disabled = true;
+    importCsvSubmit.textContent = 'Importing...';
+    try {
+        const fd = new FormData();
+        fd.append('file', pendingCsvFile);
+        fd.append('province', province);
+        fd.append('seat_type', seatType);
+        const res = await fetch('/api/sessions/import-csv', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+        alert(`Imported ${data.station_count} polling stations from ${data.pdf_name}.`);
+        closeImportCsvModal();
+        await loadDashboard();
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    } finally {
+        importCsvSubmit.disabled = false;
+        importCsvSubmit.textContent = originalText;
+    }
+});
+
 function resetLocalState() {
     pdfInput.value = '';
     uploadStatus.textContent = '';

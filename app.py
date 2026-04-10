@@ -1109,6 +1109,171 @@ async def upload_pdf(file: UploadFile, response: FastAPIResponse, session_id: Op
     }
 
 
+@app.post("/api/sessions/import-csv")
+async def import_session_from_csv(
+    file: UploadFile,
+    province: str = Form(...),
+    seat_type: str = Form(...),
+):
+    """Create a new session from a CSV previously exported by this app.
+
+    Expects the exact format produced by ``/api/polling-stations/export``:
+    headers ``name,pages,{field}_type,{field}_value,...`` and one row per
+    approved polling station. Candidate names are reverse-engineered from the
+    ``*_col3`` field names (snake_case → Title Case).
+    """
+    import csv as _csv
+    import io as _io
+
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(400, "File must be a .csv file")
+    if seat_type not in ("National", "Provincial"):
+        raise HTTPException(400, "seat_type must be 'National' or 'Provincial'")
+    if province not in PROVINCES:
+        raise HTTPException(400, f"province must be one of {PROVINCES}")
+
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")  # strip BOM if present
+    except UnicodeDecodeError:
+        raise HTTPException(400, "CSV must be UTF-8 encoded")
+
+    reader = _csv.reader(_io.StringIO(text))
+    try:
+        header = next(reader)
+    except StopIteration:
+        raise HTTPException(400, "CSV is empty")
+
+    if len(header) < 2 or header[0] != "name" or header[1] != "pages":
+        raise HTTPException(400, "CSV must start with 'name,pages' columns")
+
+    # Walk the header in pairs: ({field}_type, {field}_value).
+    fields = []
+    i = 2
+    while i < len(header):
+        h = header[i]
+        if not h.endswith("_type"):
+            raise HTTPException(400, f"Unexpected header '{h}' at column {i + 1} (expected *_type)")
+        field_name = h[:-5]
+        if i + 1 >= len(header) or header[i + 1] != f"{field_name}_value":
+            raise HTTPException(400, f"Header mismatch at column {i + 2}: expected '{field_name}_value'")
+        fields.append({"name": field_name, "type_col": i, "value_col": i + 1})
+        i += 2
+
+    # Derive candidate names from the two *_col3 fields.
+    col3_fields = [f["name"][:-5] for f in fields if f["name"].endswith("_col3")]
+    if len(col3_fields) != 2:
+        raise HTTPException(400, f"Expected exactly 2 '*_col3' fields in CSV, found {len(col3_fields)}")
+    c1_snake, c2_snake = col3_fields
+    c1_name = " ".join(p.capitalize() for p in c1_snake.split("_"))
+    c2_name = " ".join(p.capitalize() for p in c2_snake.split("_"))
+
+    # Parse data rows into {name, pages, form_data} triples.
+    stations = []
+    all_pages: set = set()
+    for row in reader:
+        if not row or not row[0]:
+            continue
+        station_name = row[0]
+        pages_str = row[1] if len(row) > 1 else ""
+        pages: list[int] = []
+        for p in (pages_str or "").split(","):
+            p = p.strip()
+            if not p:
+                continue
+            try:
+                pages.append(int(p) - 1)  # CSV uses 1-indexed page numbers
+            except ValueError:
+                continue
+        all_pages.update(pages)
+
+        form_data: dict = {}
+        for f in fields:
+            type_val = row[f["type_col"]] if f["type_col"] < len(row) else ""
+            value_val = row[f["value_col"]] if f["value_col"] < len(row) else ""
+            type_val = (type_val or "").strip()
+            value_val = (value_val or "").strip()
+            if not type_val and value_val == "":
+                continue  # field was absent from this station
+            parsed_value: Optional[int] = None
+            if value_val != "":
+                try:
+                    parsed_value = int(value_val)
+                except ValueError:
+                    parsed_value = None
+            form_data[f["name"]] = {
+                "type": type_val or "regular",
+                "value": parsed_value,
+            }
+
+        stations.append({"name": station_name, "pages": pages, "form_data": form_data})
+
+    if not stations:
+        raise HTTPException(400, "CSV has no data rows")
+
+    # Derive display name from filename; strip trailing ".csv".
+    pdf_name = file.filename
+    if pdf_name.lower().endswith(".csv"):
+        pdf_name = pdf_name[:-4]
+
+    # page_count needs to be large enough for `processed_pages` to represent
+    # 100% completion; use max(page indices) + 1, falling back to station count.
+    if all_pages:
+        page_count = max(all_pages) + 1
+        processed_pages = sorted(all_pages)
+    else:
+        page_count = len(stations)
+        processed_pages = list(range(len(stations)))
+
+    # Minimal schema_fields list — mirrors generate_schema_fields() output but
+    # without row-hint aliases (the imported session will never run OCR again).
+    schema_fields = [
+        {"name": "total_registered_voters", "alias": "Total Registered Voters"},
+        {"name": f"{c1_snake}_col3", "alias": f"{c1_name} Votes column 3"},
+        {"name": f"{c1_snake}_col6", "alias": f"{c1_name} Votes column 6"},
+        {"name": f"{c2_snake}_col3", "alias": f"{c2_name} Votes column 3"},
+        {"name": f"{c2_snake}_col6", "alias": f"{c2_name} Votes column 6"},
+        {"name": "row_a", "alias": "Row A"},
+        {"name": "row_b", "alias": "Row B"},
+        {"name": "row_c", "alias": "Row C"},
+        {"name": "row_d", "alias": "Row D"},
+    ]
+
+    sid = create_session()
+    update_session(
+        sid,
+        pdf_name=pdf_name,
+        pdf_path=None,
+        page_count=page_count,
+        processed_pages=processed_pages,
+        schema_fields=schema_fields,
+        candidate_1_name=c1_name,
+        candidate_1_row=None,
+        candidate_2_name=c2_name,
+        candidate_2_row=None,
+        province=province,
+        seat_type=seat_type,
+    )
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.executemany(
+        "INSERT INTO polling_station_queue (session_id, name, pages, status, form_data, source) "
+        "VALUES (?, ?, ?, 'approved', ?, 'ecp')",
+        [
+            (sid, s["name"], json.dumps(s["pages"]), json.dumps(s["form_data"]))
+            for s in stations
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    return {
+        "session_id": sid,
+        "pdf_name": pdf_name,
+        "station_count": len(stations),
+    }
+
+
 @app.post("/api/upload/bulk")
 async def bulk_upload_pdfs(files: list[UploadFile]):
     """Upload multiple PDFs, each becoming its own session."""
