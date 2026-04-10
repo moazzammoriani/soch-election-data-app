@@ -123,6 +123,7 @@ function renderSessionCard(s) {
                 <div class="session-meta">
                     <span class="session-status ${s.step}">${s.step}</span>
                     ${s.matched_count ? `<span class="session-tag matched">${s.matched_count} matched</span>` : ''}
+                    ${s.comparison_source ? `<span class="session-tag comparison">${s.comparison_source}</span>` : ''}
                     <span>${s.processed_pages.length} / ${s.page_count} pages</span>
                     <span>${progress}% complete</span>
                 </div>

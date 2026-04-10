@@ -220,6 +220,7 @@ h3 {
     font-weight: 500;
 }
 .session-tag.matched { background: #e0e7ff; color: #3730a3; }
+.session-tag.comparison { background: #dcfce7; color: #166534; }
 
 .empty-state {
     text-align: center;

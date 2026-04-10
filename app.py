@@ -583,6 +583,7 @@ async def list_sessions():
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "matched_count": match_counts.get(row["id"], 0),
+            "comparison_source": row["comparison_source"],
         }
         session["step"] = get_session_step({
             "pdf_name": session["pdf_name"],
