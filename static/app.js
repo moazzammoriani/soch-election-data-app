@@ -131,6 +131,7 @@ function renderSessionCard(s) {
             <div class="session-actions">
                 <button class="continue-btn" data-id="${s.id}">Continue</button>
                 ${s.step === 'process' ? `<button class="chart-btn" data-id="${s.id}">Charts</button>` : ''}
+                <button class="rename-btn" data-id="${s.id}" data-name="${(s.pdf_name || '').replace(/"/g, '&quot;')}">Rename</button>
                 <button class="danger delete-btn" data-id="${s.id}">Delete</button>
             </div>
         </div>
@@ -208,6 +209,32 @@ function renderSessionsList(sessions) {
     sessionsList.querySelectorAll('.chart-btn').forEach(btn => {
         btn.addEventListener('click', () => openCharts(btn.dataset.id));
     });
+
+    sessionsList.querySelectorAll('.rename-btn').forEach(btn => {
+        btn.addEventListener('click', () => renameSession(btn.dataset.id, btn.dataset.name));
+    });
+}
+
+async function renameSession(sessionId, currentName) {
+    const newName = prompt('Rename session:', currentName || '');
+    if (newName == null) return;
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === currentName) return;
+
+    try {
+        const res = await fetch(`/api/sessions/${sessionId}/rename`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: trimmed }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to rename');
+        }
+        await loadDashboard();
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    }
 }
 
 // Accordion toggle via event delegation

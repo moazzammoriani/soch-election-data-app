@@ -623,6 +623,21 @@ async def delete_session_endpoint(target_session_id: str, response: FastAPIRespo
     return {"status": "ok"}
 
 
+@app.patch("/api/sessions/{target_session_id}/rename")
+async def rename_session(target_session_id: str, req: RenamePollingStationRequest):
+    """Rename a session (updates pdf_name, which drives seat matching)."""
+    session = get_session(target_session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    new_name = req.name.strip()
+    if not new_name:
+        raise HTTPException(400, "Name cannot be empty")
+
+    update_session(target_session_id, pdf_name=new_name)
+    return {"status": "ok", "pdf_name": new_name}
+
+
 @app.get("/api/sessions/{target_session_id}/chart-data")
 async def get_chart_data(target_session_id: str, source: str = "ecp"):
     """Get aggregated vote data for charts."""
