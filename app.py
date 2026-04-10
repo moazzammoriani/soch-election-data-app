@@ -14,7 +14,7 @@ import fitz
 from fastapi import FastAPI, UploadFile, HTTPException, Cookie, Response as FastAPIResponse, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, Field, ConfigDict, create_model
+from pydantic import BaseModel, Field, ConfigDict, create_model, TypeAdapter
 import base64
 import os
 from openai import OpenAI, RateLimitError
@@ -442,6 +442,26 @@ class BulkActionRequest(BaseModel):
     ids: Optional[list[int]] = None
 
 
+class _PollingStationRefModel(BaseModel):
+    seat_name: str
+    polling_station_num: int
+    name: Optional[str] = None
+    block_codes: list[str]
+    total_reg_voters: Optional[int] = None
+
+
+class _MatchRecordModel(BaseModel):
+    nat: _PollingStationRefModel
+    prov: Optional[_PollingStationRefModel] = None
+    matching_block_codes: list[str]
+    total_reg_voters_equal: Optional[bool] = None
+    total_reg_voters_delta: Optional[int] = None
+    name_score: Optional[float] = None
+
+
+_MATCH_RECORDS_ADAPTER = TypeAdapter(list[_MatchRecordModel])
+
+
 class PageGuesses(BaseModel):
     pages: list[int]
 
@@ -776,6 +796,136 @@ async def get_na_pa_turnout_diff(target_session_id: str):
         "na_seat": seat_name,
         "pa_seats": sorted(pa_seat_names),
         "stations": stations,
+    }
+
+
+@app.post("/api/polling-scheme/import")
+async def import_polling_scheme(file: UploadFile):
+    """Replace all polling scheme mapping data with the contents of an uploaded JSON file.
+
+    Accepts the exact output format of polling_scheme/map_polling_schemes.py
+    (a JSON array of MatchRecord objects). Wipes polling_scheme_match,
+    polling_scheme_station_block_code, and polling_scheme_station, then
+    repopulates them from the upload.
+    """
+    if not file.filename or not file.filename.lower().endswith(".json"):
+        raise HTTPException(400, "File must be a .json file")
+
+    content = await file.read()
+    try:
+        records = _MATCH_RECORDS_ADAPTER.validate_json(content)
+    except Exception as e:
+        raise HTTPException(400, f"Invalid polling scheme JSON: {e}")
+
+    # Collect station refs (deduped by station id) and matched pairs
+    station_payloads: dict[str, _PollingStationRefModel] = {}
+    matched_pairs: list[tuple[_MatchRecordModel, str, str]] = []
+    for rec in records:
+        nat_id = f"{rec.nat.seat_name}:{rec.nat.polling_station_num}"
+        station_payloads[nat_id] = rec.nat
+        if rec.prov is not None:
+            prov_id = f"{rec.prov.seat_name}:{rec.prov.polling_station_num}"
+            station_payloads[prov_id] = rec.prov
+            matched_pairs.append((rec, nat_id, prov_id))
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+
+    # Ensure tables exist (fresh installs won't have them until map_polling_schemes.py runs).
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS polling_scheme_station (
+            id TEXT PRIMARY KEY,
+            seat_name TEXT NOT NULL,
+            seat_type TEXT NOT NULL CHECK (seat_type IN ('National', 'Provincial')),
+            polling_station_num INTEGER NOT NULL,
+            station_name TEXT,
+            total_reg_voters INTEGER,
+            UNIQUE (seat_name, polling_station_num)
+        );
+        CREATE TABLE IF NOT EXISTS polling_scheme_station_block_code (
+            station_id TEXT NOT NULL,
+            block_code TEXT NOT NULL,
+            PRIMARY KEY (station_id, block_code),
+            FOREIGN KEY (station_id) REFERENCES polling_scheme_station(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS polling_scheme_match (
+            nat_station_id TEXT PRIMARY KEY,
+            prov_station_id TEXT NOT NULL UNIQUE,
+            matching_block_codes TEXT NOT NULL,
+            total_reg_voters_equal INTEGER,
+            total_reg_voters_delta INTEGER,
+            name_score REAL,
+            FOREIGN KEY (nat_station_id) REFERENCES polling_scheme_station(id) ON DELETE CASCADE,
+            FOREIGN KEY (prov_station_id) REFERENCES polling_scheme_station(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_polling_scheme_station_seat_num
+            ON polling_scheme_station (seat_name, polling_station_num);
+        CREATE INDEX IF NOT EXISTS idx_polling_scheme_match_prov_station
+            ON polling_scheme_match (prov_station_id);
+    """)
+
+    with conn:
+        # Wipe in FK-safe order
+        conn.execute("DELETE FROM polling_scheme_match")
+        conn.execute("DELETE FROM polling_scheme_station_block_code")
+        conn.execute("DELETE FROM polling_scheme_station")
+
+        # Insert stations
+        conn.executemany(
+            """
+            INSERT INTO polling_scheme_station
+                (id, seat_name, seat_type, polling_station_num, station_name, total_reg_voters)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    sid,
+                    ref.seat_name,
+                    "National" if ref.seat_name.lower().startswith("na_") else "Provincial",
+                    ref.polling_station_num,
+                    ref.name,
+                    ref.total_reg_voters,
+                )
+                for sid, ref in station_payloads.items()
+            ],
+        )
+
+        # Insert block codes
+        conn.executemany(
+            "INSERT INTO polling_scheme_station_block_code (station_id, block_code) VALUES (?, ?)",
+            [
+                (sid, bc)
+                for sid, ref in station_payloads.items()
+                for bc in ref.block_codes
+            ],
+        )
+
+        # Insert matches (only records where prov is not null)
+        conn.executemany(
+            """
+            INSERT INTO polling_scheme_match
+                (nat_station_id, prov_station_id, matching_block_codes,
+                 total_reg_voters_equal, total_reg_voters_delta, name_score)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    nat_id,
+                    prov_id,
+                    json.dumps(rec.matching_block_codes),
+                    rec.total_reg_voters_equal,
+                    rec.total_reg_voters_delta,
+                    rec.name_score,
+                )
+                for rec, nat_id, prov_id in matched_pairs
+            ],
+        )
+
+    conn.close()
+    return {
+        "stations": len(station_payloads),
+        "matches": len(matched_pairs),
+        "total_records": len(records),
     }
 
 

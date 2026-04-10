@@ -303,6 +303,50 @@ bulkUploadInput.addEventListener('change', async () => {
     }
 });
 
+const importSchemeBtn = document.getElementById('import-scheme-btn');
+const importSchemeInput = document.getElementById('import-scheme-input');
+
+importSchemeBtn.addEventListener('click', () => importSchemeInput.click());
+
+importSchemeInput.addEventListener('change', async () => {
+    const file = importSchemeInput.files[0];
+    if (!file) return;
+
+    if (!confirm(
+        `This will REPLACE all existing polling scheme mappings with the ` +
+        `contents of ${file.name}. All current NA-to-PA matches will be deleted. Continue?`
+    )) {
+        importSchemeInput.value = '';
+        return;
+    }
+
+    const originalText = importSchemeBtn.textContent;
+    importSchemeBtn.disabled = true;
+    importSchemeBtn.textContent = 'Uploading...';
+
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/polling-scheme/import', {
+            method: 'POST',
+            body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+        alert(
+            `Polling scheme imported.\n` +
+            `Stations: ${data.stations}\nMatches: ${data.matches}\nRecords: ${data.total_records}`
+        );
+        await loadDashboard();
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    } finally {
+        importSchemeBtn.disabled = false;
+        importSchemeBtn.textContent = originalText;
+        importSchemeInput.value = '';
+    }
+});
+
 function resetLocalState() {
     pdfInput.value = '';
     uploadStatus.textContent = '';
