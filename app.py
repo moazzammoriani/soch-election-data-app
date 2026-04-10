@@ -643,7 +643,16 @@ async def get_chart_data(target_session_id: str, source: str = "ecp"):
         "SELECT name, form_data FROM polling_station_queue WHERE session_id = ? AND status = 'approved' AND source = ? ORDER BY id ASC",
         (target_session_id, source)
     ).fetchall()
+
+    # Load trusted registered-voter counts from the polling scheme for this
+    # seat, keyed by polling_station_num. Used as an override over the OCR'd
+    # form_data value whenever the scheme has a number for that station.
+    scheme_registered = _load_polling_scheme_registered(
+        conn, normalize_seat_name(session.get("pdf_name"))
+    )
     conn.close()
+
+    station_num_re = re.compile(r'^Polling Station\s+(\d+)$')
 
     c1_total = 0
     c2_total = 0
@@ -654,7 +663,17 @@ async def get_chart_data(target_session_id: str, source: str = "ecp"):
         c2_val = form_data.get(c2_field, {}).get("value") or 0
         c1_total += c1_val
         c2_total += c2_val
-        registered = form_data.get("total_registered_voters", {}).get("value") or 0
+
+        # Prefer polling-scheme total_reg_voters when available for this station.
+        scheme_reg = None
+        m = station_num_re.match(row["name"])
+        if m:
+            scheme_reg = scheme_registered.get(int(m.group(1)))
+        if scheme_reg and scheme_reg > 0:
+            registered = scheme_reg
+        else:
+            registered = form_data.get("total_registered_voters", {}).get("value") or 0
+
         row_a = form_data.get("row_a", {}).get("value") or 0
         row_d = form_data.get("row_d", {}).get("value") or 0
         votes_cast = row_a if row_a else row_d
@@ -672,12 +691,20 @@ async def get_chart_data(target_session_id: str, source: str = "ecp"):
     }
 
 
-def _compute_turnout(form_data: dict) -> Optional[float]:
-    """Compute turnout ratio from form data."""
+def _compute_turnout(form_data: dict, override_registered: Optional[int] = None) -> Optional[float]:
+    """Compute turnout ratio from form data.
+
+    If ``override_registered`` is a positive int, it is used as the denominator
+    instead of the form's ``total_registered_voters`` field — useful when a
+    trusted polling-scheme total is available for the station.
+    """
     row_a = form_data.get("row_a", {}).get("value") or 0
     row_d = form_data.get("row_d", {}).get("value") or 0
     votes_cast = row_a if row_a else row_d
-    registered = form_data.get("total_registered_voters", {}).get("value") or 0
+    if override_registered and override_registered > 0:
+        registered = override_registered
+    else:
+        registered = form_data.get("total_registered_voters", {}).get("value") or 0
     return (votes_cast / registered) if registered else None
 
 def _votes_cast(form_data: dict) -> Optional[int]:
@@ -686,6 +713,27 @@ def _votes_cast(form_data: dict) -> Optional[int]:
     row_d = form_data.get("row_d", {}).get("value") or 0
     votes_cast = row_a if row_a else row_d
     return votes_cast if votes_cast else None
+
+
+def _load_polling_scheme_registered(conn, seat_name: Optional[str]) -> dict:
+    """Return {polling_station_num: total_reg_voters} for a given seat.
+
+    Only includes stations where the polling scheme has a non-null positive
+    total_reg_voters. Empty dict if no scheme data exists for this seat or if
+    the polling_scheme_station table hasn't been created yet.
+    """
+    if not seat_name:
+        return {}
+    try:
+        rows = conn.execute(
+            "SELECT polling_station_num, total_reg_voters FROM polling_scheme_station "
+            "WHERE seat_name = ? AND total_reg_voters IS NOT NULL AND total_reg_voters > 0",
+            (seat_name,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # Table doesn't exist — no polling scheme has been imported yet.
+        return {}
+    return {r["polling_station_num"]: r["total_reg_voters"] for r in rows}
 
 
 @app.get("/api/sessions/{target_session_id}/na-pa-turnout-diff")
@@ -712,10 +760,14 @@ async def get_na_pa_turnout_diff(target_session_id: str):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
 
-    # Get all (na_num -> pa_seat, pa_num) mappings
+    # Get all (na_num -> pa_seat, pa_num) mappings, plus polling-scheme
+    # registered-voter totals for each side so we can prefer them over the
+    # OCR'd form_data values when computing turnout %.
     match_rows = conn.execute("""
         SELECT nat.polling_station_num AS na_num,
-               prov.seat_name AS pa_seat, prov.polling_station_num AS pa_num
+               prov.seat_name AS pa_seat, prov.polling_station_num AS pa_num,
+               nat.total_reg_voters AS na_ps_reg,
+               prov.total_reg_voters AS pa_ps_reg
         FROM polling_scheme_match psm
         JOIN polling_scheme_station nat ON nat.id = psm.nat_station_id
         JOIN polling_scheme_station prov ON prov.id = psm.prov_station_id
@@ -791,8 +843,8 @@ async def get_na_pa_turnout_diff(target_session_id: str):
         if na_votes is None or pa_votes is None:
             continue
 
-        na_turnout_pct = _compute_turnout(na_fd)
-        pa_turnout_pct = _compute_turnout(pa_fd)
+        na_turnout_pct = _compute_turnout(na_fd, mr["na_ps_reg"])
+        pa_turnout_pct = _compute_turnout(pa_fd, mr["pa_ps_reg"])
 
         # Winner index: 0 = c1, 1 = c2, None if tied or schema missing.
         winner_idx = None
