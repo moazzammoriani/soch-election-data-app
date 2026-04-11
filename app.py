@@ -2616,12 +2616,23 @@ async def update_polling_station_form_data(station_id: int, req: ApprovePollingS
 
 @app.get("/api/polling-stations/export")
 async def export_polling_stations_csv(session_id: Optional[str] = Cookie(default=None)):
-    """Export all approved polling stations as a CSV file."""
+    """Export all approved polling stations as a CSV file.
+
+    For National sessions, each row is additionally joined with the matched PA
+    polling station (via polling_scheme_match) so ballot-integrity comparisons
+    can be done in a spreadsheet without manually joining two exports. Unmatched
+    NA rows still appear with blank pa_* cells. PA session exports are unchanged.
+    """
     import csv
     import io
 
     if not session_id:
         raise HTTPException(400, "No session")
+
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    is_national = session.get("seat_type") == "National"
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -2629,9 +2640,9 @@ async def export_polling_stations_csv(session_id: Optional[str] = Cookie(default
         "SELECT * FROM polling_station_queue WHERE session_id = ? AND status = 'approved' AND source = 'ecp' ORDER BY id ASC",
         (session_id,)
     ).fetchall()
-    conn.close()
 
     if not rows:
+        conn.close()
         raise HTTPException(400, "No approved polling stations to export")
 
     # Build CSV in memory
@@ -2655,14 +2666,98 @@ async def export_polling_stations_csv(session_id: Optional[str] = Cookie(default
     # Sort field names for consistent column order
     sorted_fields = sorted(all_field_names)
 
+    # Build the NA -> matched PA lookup for National sessions. Mirrors the
+    # query shape in get_na_pa_turnout_diff but without any of the chart
+    # filters — CSV export is a raw dump.
+    PA_FIXED_FIELDS = [
+        "total_registered_voters",
+        "row_a",
+        "row_b",
+        "row_c",
+        "row_d",
+    ]
+    na_num_to_pa: dict[int, dict] = {}
+    if is_national:
+        seat_name = normalize_seat_name(session["pdf_name"])
+
+        match_rows = conn.execute("""
+            SELECT nat.polling_station_num AS na_num,
+                   prov.seat_name AS pa_seat, prov.polling_station_num AS pa_num,
+                   prov.total_reg_voters AS pa_ps_reg
+            FROM polling_scheme_match psm
+            JOIN polling_scheme_station nat ON nat.id = psm.nat_station_id
+            JOIN polling_scheme_station prov ON prov.id = psm.prov_station_id
+            WHERE nat.seat_name = ?
+        """, (seat_name,)).fetchall()
+
+        pa_seat_names = {r["pa_seat"] for r in match_rows}
+
+        pa_seat_to_session: dict[str, str] = {}
+        if pa_seat_names:
+            prov_sessions = conn.execute(
+                "SELECT id, pdf_name FROM sessions WHERE seat_type = 'Provincial'"
+            ).fetchall()
+            for ps in prov_sessions:
+                sn = normalize_seat_name(ps["pdf_name"])
+                if sn in pa_seat_names:
+                    pa_seat_to_session[sn] = ps["id"]
+
+        pa_data: dict[tuple[str, int], dict] = {}
+        pa_session_ids = list(pa_seat_to_session.values())
+        if pa_session_ids:
+            placeholders = ",".join("?" * len(pa_session_ids))
+            pa_queue = conn.execute(
+                f"SELECT session_id, name, pages, form_data FROM polling_station_queue "
+                f"WHERE session_id IN ({placeholders}) AND status = 'approved' AND source = 'ecp'",
+                pa_session_ids,
+            ).fetchall()
+            session_to_seat = {sid: sn for sn, sid in pa_seat_to_session.items()}
+            pa_station_re = re.compile(r'^Polling Station\s+(\d+)$')
+            for pa_row in pa_queue:
+                m = pa_station_re.match(pa_row["name"])
+                if not m:
+                    continue
+                sn = session_to_seat.get(pa_row["session_id"])
+                if not sn:
+                    continue
+                pa_data[(sn, int(m.group(1)))] = {
+                    "name": pa_row["name"],
+                    "pages": json.loads(pa_row["pages"]),
+                    "form_data": json.loads(pa_row["form_data"]) if pa_row["form_data"] else {},
+                }
+
+        for mr in match_rows:
+            entry = pa_data.get((mr["pa_seat"], mr["pa_num"]))
+            if entry is None:
+                continue
+            na_num_to_pa[mr["na_num"]] = {
+                "pa_seat_name": mr["pa_seat"],
+                "pa_ps_reg": mr["pa_ps_reg"],
+                "name": entry["name"],
+                "pages": entry["pages"],
+                "form_data": entry["form_data"],
+            }
+
+    conn.close()
+
     # Build header row: name, pages, then flattened form fields
     headers = ["name", "pages"]
     for field in sorted_fields:
         headers.append(f"{field}_type")
         headers.append(f"{field}_value")
+    if is_national:
+        headers.append("pa_seat_name")
+        headers.append("pa_name")
+        headers.append("pa_pages")
+        headers.append("pa_polling_scheme_registered")
+        for field in PA_FIXED_FIELDS:
+            headers.append(f"pa_{field}_type")
+            headers.append(f"pa_{field}_value")
 
     writer = csv.writer(output)
     writer.writerow(headers)
+
+    station_num_re = re.compile(r'^Polling Station\s+(\d+)$')
 
     # Write data rows
     for station in stations_data:
@@ -2674,6 +2769,23 @@ async def export_polling_stations_csv(session_id: Optional[str] = Cookie(default
             field_data = station["form_data"].get(field, {})
             row_data.append(field_data.get("type", ""))
             row_data.append(field_data.get("value", "") if field_data.get("value") is not None else "")
+
+        if is_national:
+            match = station_num_re.match(station["name"])
+            pa_entry = na_num_to_pa.get(int(match.group(1))) if match else None
+            if pa_entry:
+                row_data.append(pa_entry["pa_seat_name"])
+                row_data.append(pa_entry["name"])
+                row_data.append(",".join(str(p + 1) for p in pa_entry["pages"]))
+                row_data.append(pa_entry["pa_ps_reg"] if pa_entry["pa_ps_reg"] is not None else "")
+                for field in PA_FIXED_FIELDS:
+                    fd = pa_entry["form_data"].get(field, {})
+                    row_data.append(fd.get("type", ""))
+                    row_data.append(fd.get("value", "") if fd.get("value") is not None else "")
+            else:
+                # Unmatched or PA not yet approved — leave all pa_ cells blank
+                row_data.extend([""] * (4 + 2 * len(PA_FIXED_FIELDS)))
+
         writer.writerow(row_data)
 
     csv_content = output.getvalue()
