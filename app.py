@@ -881,6 +881,14 @@ async def get_na_pa_turnout_diff(target_session_id: str):
         if na_votes is None or pa_votes is None:
             continue
 
+        # Drop pairs where the Provincial station has more votes cast than the
+        # National one. At a shared physical polling station every PA voter is
+        # also an NA voter, so NA >= PA is the expected ordering; pairs where
+        # PA > NA are almost always OCR under-counts on the NA side or
+        # scheme-mismatched pairings.
+        if pa_votes > na_votes:
+            continue
+
         na_turnout_pct = _compute_turnout(na_fd, mr["na_ps_reg"])
         pa_turnout_pct = _compute_turnout(pa_fd, mr["pa_ps_reg"])
 
@@ -909,7 +917,7 @@ async def get_na_pa_turnout_diff(target_session_id: str):
             "pa_station_num": pa_num,
             "na_turnout": na_votes,
             "pa_turnout": pa_votes,
-            "diff": abs(na_votes - pa_votes),
+            "diff": na_votes - pa_votes,
             "na_turnout_pct": na_turnout_pct,
             "pa_turnout_pct": pa_turnout_pct,
             "winner_idx": winner_idx,
