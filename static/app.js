@@ -2153,6 +2153,16 @@ function renderNaPaTurnoutDiffChart(data) {
     const labels = data.stations.map(s => s.na_station_num);
     const diffs = data.stations.map(s => s.diff);
 
+    // Color bars by NA winner. Palette matches the violin chart for visual
+    // consistency across the NA-PA tabs. Tied/unknown stations are filtered
+    // out by the backend, so only winner_idx 0 or 1 reaches here.
+    const C1_COLOR = 'rgba(20, 150, 160, 0.85)';   // teal — candidate 1
+    const C2_COLOR = 'rgba(220, 100, 120, 0.85)';  // pink — candidate 2
+    const barColors = data.stations.map(s => s.winner_idx === 0 ? C1_COLOR : C2_COLOR);
+
+    const [c1Name, c2Name] = data.candidates || [];
+    const hasCandidates = Boolean(c1Name && c2Name);
+
     const ctx = document.getElementById('na-pa-turnout-diff-chart').getContext('2d');
     naPaTurnoutDiffChart = new Chart(ctx, {
         type: 'bar',
@@ -2161,22 +2171,40 @@ function renderNaPaTurnoutDiffChart(data) {
             datasets: [{
                 label: 'Turnout Difference',
                 data: diffs,
-                backgroundColor: '#8b5cf6',
+                backgroundColor: barColors,
             }],
         },
         options: {
             responsive: true,
             plugins: {
-                legend: { display: false },
+                legend: {
+                    display: hasCandidates,
+                    position: 'top',
+                    labels: {
+                        // Synthesize one legend entry per winner group so the
+                        // colors are legible even though there's only one
+                        // dataset. Clicking them is a no-op (we swallow it
+                        // below) since there's nothing to toggle.
+                        generateLabels: () => [
+                            { text: `${c1Name} won`, fillStyle: C1_COLOR, strokeStyle: C1_COLOR, lineWidth: 0 },
+                            { text: `${c2Name} won`, fillStyle: C2_COLOR, strokeStyle: C2_COLOR, lineWidth: 0 },
+                        ],
+                    },
+                    onClick: () => {},
+                },
                 tooltip: {
                     callbacks: {
                         title: (items) => `NA Station ${items[0].label}`,
                         label: (ctx) => {
                             const station = data.stations[ctx.dataIndex];
-                            return [
+                            const lines = [
                                 `Diff: ${ctx.parsed.y} votes`,
                                 `NA: ${station.na_turnout} | PA (${station.pa_seat_name} #${station.pa_station_num}): ${station.pa_turnout}`,
                             ];
+                            if (hasCandidates) {
+                                lines.push(`Winner: ${station.winner_idx === 0 ? c1Name : c2Name}`);
+                            }
+                            return lines;
                         },
                     },
                 },

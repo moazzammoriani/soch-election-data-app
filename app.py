@@ -70,6 +70,12 @@ class VoteValue(BaseModel):
 DB_PATH = Path("election_data.db")
 UPLOADS_DIR = Path("uploads")
 
+# Chart-level filter: stations with computed turnout strictly above this ratio
+# are excluded from every chart (both per-station plots and aggregate totals).
+# Anything above ~95% is almost always an OCR misread or bad registered-voter
+# count rather than a real vote outcome, and lets them distort charts.
+TURNOUT_CAP = 0.95
+
 
 def init_db():
     UPLOADS_DIR.mkdir(exist_ok=True)
@@ -677,23 +683,33 @@ async def get_chart_data(target_session_id: str, source: str = "ecp"):
         form_data = json.loads(row["form_data"]) if row["form_data"] else {}
         c1_val = form_data.get(c1_field, {}).get("value") or 0
         c2_val = form_data.get(c2_field, {}).get("value") or 0
-        c1_total += c1_val
-        c2_total += c2_val
 
-        # Prefer polling-scheme total_reg_voters when available for this station.
-        scheme_reg = None
+        # Drop stations where our two tracked candidates are tied (including
+        # the 0-0 "neither got votes" case). We can't determine a winner here
+        # so the station is excluded from every chart and from aggregate totals.
+        if c1_val == c2_val:
+            continue
+
+        # Use the larger of OCR'd and polling-scheme registered voters. Guards
+        # against OCR digit misreads that would otherwise produce >100% turnout.
+        scheme_reg = 0
         m = station_num_re.match(row["name"])
         if m:
-            scheme_reg = scheme_registered.get(int(m.group(1)))
-        if scheme_reg and scheme_reg > 0:
-            registered = scheme_reg
-        else:
-            registered = form_data.get("total_registered_voters", {}).get("value") or 0
+            scheme_reg = scheme_registered.get(int(m.group(1))) or 0
+        ocr_reg = form_data.get("total_registered_voters", {}).get("value") or 0
+        registered = max(ocr_reg, scheme_reg)
 
-        row_a = form_data.get("row_a", {}).get("value") or 0
-        row_d = form_data.get("row_d", {}).get("value") or 0
-        votes_cast = row_a if row_a else row_d
+        votes_cast = _votes_cast(form_data) or 0
         turnout = (votes_cast / registered) if registered else None
+
+        # Exclude bogus-turnout stations from every chart (per-station and
+        # aggregate). Stations with unknown turnout (no registered voters at
+        # all) still pass through, since we can't judge them.
+        if turnout is not None and turnout > TURNOUT_CAP:
+            continue
+
+        c1_total += c1_val
+        c2_total += c2_val
         per_station.append({"name": row["name"], "votes": [c1_val, c2_val], "turnout": turnout, "registered": registered})
 
     return {
@@ -707,28 +723,34 @@ async def get_chart_data(target_session_id: str, source: str = "ecp"):
     }
 
 
-def _compute_turnout(form_data: dict, override_registered: Optional[int] = None) -> Optional[float]:
+def _votes_cast(form_data: dict) -> Optional[int]:
+    """Return votes cast for a station as max(row_a, row_b, row_c, row_d).
+
+    Any of the four rows can represent votes cast depending on how the form
+    was filled out; taking the max protects against OCR picking up a
+    partially-filled row and under-counting.
+    """
+    values = [
+        form_data.get("row_a", {}).get("value") or 0,
+        form_data.get("row_b", {}).get("value") or 0,
+        form_data.get("row_c", {}).get("value") or 0,
+        form_data.get("row_d", {}).get("value") or 0,
+    ]
+    votes_cast = max(values)
+    return votes_cast if votes_cast else None
+
+
+def _compute_turnout(form_data: dict, scheme_registered: Optional[int] = None) -> Optional[float]:
     """Compute turnout ratio from form data.
 
-    If ``override_registered`` is a positive int, it is used as the denominator
-    instead of the form's ``total_registered_voters`` field — useful when a
-    trusted polling-scheme total is available for the station.
+    Uses ``max(ocr_total_registered_voters, scheme_registered)`` as the
+    denominator — this way the larger of the two trusted sources wins, which
+    avoids bogus >100% turnouts when OCR misreads a digit low on a single form.
     """
-    row_a = form_data.get("row_a", {}).get("value") or 0
-    row_d = form_data.get("row_d", {}).get("value") or 0
-    votes_cast = row_a if row_a else row_d
-    if override_registered and override_registered > 0:
-        registered = override_registered
-    else:
-        registered = form_data.get("total_registered_voters", {}).get("value") or 0
+    votes_cast = _votes_cast(form_data) or 0
+    ocr_reg = form_data.get("total_registered_voters", {}).get("value") or 0
+    registered = max(ocr_reg or 0, scheme_registered or 0)
     return (votes_cast / registered) if registered else None
-
-def _votes_cast(form_data: dict) -> Optional[int]:
-    """Get raw votes cast from form data."""
-    row_a = form_data.get("row_a", {}).get("value") or 0
-    row_d = form_data.get("row_d", {}).get("value") or 0
-    votes_cast = row_a if row_a else row_d
-    return votes_cast if votes_cast else None
 
 
 def _load_polling_scheme_registered(conn, seat_name: Optional[str]) -> dict:
@@ -862,15 +884,24 @@ async def get_na_pa_turnout_diff(target_session_id: str):
         na_turnout_pct = _compute_turnout(na_fd, mr["na_ps_reg"])
         pa_turnout_pct = _compute_turnout(pa_fd, mr["pa_ps_reg"])
 
-        # Winner index: 0 = c1, 1 = c2, None if tied or schema missing.
-        winner_idx = None
-        if c1_field and c2_field:
-            c1_val = na_fd.get(c1_field, {}).get("value") or 0
-            c2_val = na_fd.get(c2_field, {}).get("value") or 0
-            if c1_val > c2_val:
-                winner_idx = 0
-            elif c2_val > c1_val:
-                winner_idx = 1
+        # Exclude pairs where either side's turnout is above the cap — these
+        # are almost always OCR digit misreads rather than real outcomes.
+        if (na_turnout_pct is not None and na_turnout_pct > TURNOUT_CAP) or \
+           (pa_turnout_pct is not None and pa_turnout_pct > TURNOUT_CAP):
+            continue
+
+        # Winner index: 0 = c1, 1 = c2. Ties (including 0-0) and sessions
+        # without a candidate schema are dropped from the chart entirely.
+        if not c1_field or not c2_field:
+            continue
+        c1_val = na_fd.get(c1_field, {}).get("value") or 0
+        c2_val = na_fd.get(c2_field, {}).get("value") or 0
+        if c1_val > c2_val:
+            winner_idx = 0
+        elif c2_val > c1_val:
+            winner_idx = 1
+        else:
+            continue
 
         stations.append({
             "na_station_num": na_num,
