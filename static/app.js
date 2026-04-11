@@ -336,6 +336,35 @@ const importSchemeInput = document.getElementById('import-scheme-input');
 
 importSchemeBtn.addEventListener('click', () => importSchemeInput.click());
 
+const exportSchemeBtn = document.getElementById('export-scheme-btn');
+
+exportSchemeBtn.addEventListener('click', async () => {
+    const originalText = exportSchemeBtn.textContent;
+    exportSchemeBtn.disabled = true;
+    exportSchemeBtn.textContent = 'Exporting...';
+    try {
+        const res = await fetch('/api/polling-scheme/export');
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to export polling scheme');
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'polling_scheme.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    } finally {
+        exportSchemeBtn.disabled = false;
+        exportSchemeBtn.textContent = originalText;
+    }
+});
+
 importSchemeInput.addEventListener('change', async () => {
     const file = importSchemeInput.files[0];
     if (!file) return;

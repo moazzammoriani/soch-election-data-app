@@ -894,6 +894,90 @@ async def get_na_pa_turnout_diff(target_session_id: str):
     }
 
 
+@app.get("/api/polling-scheme/export")
+async def export_polling_scheme():
+    """Export the current polling scheme mapping as JSON.
+
+    Output is the exact format accepted by /api/polling-scheme/import: a JSON
+    array of MatchRecord objects, one per NA station. Matched NA stations
+    include their paired PA station under `prov`; unmatched NA stations have
+    `prov: null`.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    try:
+        station_rows = conn.execute(
+            "SELECT id, seat_name, seat_type, polling_station_num, station_name, total_reg_voters "
+            "FROM polling_scheme_station"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        conn.close()
+        raise HTTPException(404, "Polling scheme has not been imported yet")
+
+    block_rows = conn.execute(
+        "SELECT station_id, block_code FROM polling_scheme_station_block_code"
+    ).fetchall()
+    match_rows = conn.execute(
+        "SELECT nat_station_id, prov_station_id, matching_block_codes, "
+        "total_reg_voters_equal, total_reg_voters_delta, name_score "
+        "FROM polling_scheme_match"
+    ).fetchall()
+    conn.close()
+
+    blocks_by_station: dict[str, list[str]] = {}
+    for r in block_rows:
+        blocks_by_station.setdefault(r["station_id"], []).append(r["block_code"])
+
+    station_ref_by_id: dict[str, dict] = {}
+    for s in station_rows:
+        station_ref_by_id[s["id"]] = {
+            "seat_name": s["seat_name"],
+            "polling_station_num": s["polling_station_num"],
+            "name": s["station_name"],
+            "block_codes": sorted(blocks_by_station.get(s["id"], [])),
+            "total_reg_voters": s["total_reg_voters"],
+        }
+
+    matches_by_nat = {r["nat_station_id"]: r for r in match_rows}
+
+    records = []
+    for s in station_rows:
+        if s["seat_type"] != "National":
+            continue
+        nat_ref = station_ref_by_id[s["id"]]
+        match = matches_by_nat.get(s["id"])
+        if match is not None:
+            prov_ref = station_ref_by_id.get(match["prov_station_id"])
+            equal = match["total_reg_voters_equal"]
+            records.append({
+                "nat": nat_ref,
+                "prov": prov_ref,
+                "matching_block_codes": json.loads(match["matching_block_codes"]),
+                "total_reg_voters_equal": bool(equal) if equal is not None else None,
+                "total_reg_voters_delta": match["total_reg_voters_delta"],
+                "name_score": match["name_score"],
+            })
+        else:
+            records.append({
+                "nat": nat_ref,
+                "prov": None,
+                "matching_block_codes": [],
+                "total_reg_voters_equal": None,
+                "total_reg_voters_delta": None,
+                "name_score": None,
+            })
+
+    records.sort(key=lambda r: (r["nat"]["seat_name"], r["nat"]["polling_station_num"]))
+
+    payload = json.dumps(records, indent=2, ensure_ascii=False)
+    return FastAPIResponse(
+        content=payload,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="polling_scheme.json"'},
+    )
+
+
 @app.post("/api/polling-scheme/import")
 async def import_polling_scheme(file: UploadFile):
     """Replace all polling scheme mapping data with the contents of an uploaded JSON file.
