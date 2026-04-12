@@ -1098,7 +1098,7 @@ async def import_polling_scheme(file: UploadFile):
             [
                 (
                     sid,
-                    ref.seat_name,
+                    normalize_seat_name(ref.seat_name) or ref.seat_name,
                     "National" if ref.seat_name.lower().startswith("na_") else "Provincial",
                     ref.polling_station_num,
                     ref.name,
