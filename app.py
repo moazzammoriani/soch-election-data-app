@@ -1412,6 +1412,171 @@ async def import_session_from_csv(
     }
 
 
+@app.post("/api/sessions/import-form48")
+async def import_session_from_form48(
+    file: UploadFile,
+    candidate_1: str = Form(...),
+    candidate_2: str = Form(...),
+    province: str = Form(...),
+    seat_type: str = Form(...),
+):
+    """Create a new session from a Form 48 CSV (ECP result sheet).
+
+    Expects columns: Sr.No, Polling Station, <candidate columns...>, Valid, Invalid, Total.
+    The caller specifies which two candidate columns to track.
+    """
+    import csv as _csv
+    import io as _io
+
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(400, "File must be a .csv file")
+    if seat_type not in ("National", "Provincial"):
+        raise HTTPException(400, "seat_type must be 'National' or 'Provincial'")
+    if province not in PROVINCES:
+        raise HTTPException(400, f"province must be one of {PROVINCES}")
+
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "CSV must be UTF-8 encoded")
+
+    reader = _csv.reader(_io.StringIO(text))
+    try:
+        header = next(reader)
+    except StopIteration:
+        raise HTTPException(400, "CSV is empty")
+
+    # Normalise whitespace in headers
+    header = [h.strip() for h in header]
+
+    # Locate required columns
+    if "Sr.No" not in header:
+        raise HTTPException(400, "CSV must have a 'Sr.No' column")
+    sr_idx = header.index("Sr.No")
+
+    if candidate_1 not in header:
+        raise HTTPException(400, f"Candidate column '{candidate_1}' not found in CSV")
+    if candidate_2 not in header:
+        raise HTTPException(400, f"Candidate column '{candidate_2}' not found in CSV")
+    c1_idx = header.index(candidate_1)
+    c2_idx = header.index(candidate_2)
+
+    valid_idx = header.index("Valid") if "Valid" in header else None
+    total_idx = header.index("Total") if "Total" in header else None
+
+    # Build snake_case field names for the two tracked candidates
+    c1_snake = candidate_1.lower().replace(" ", "_")
+    c2_snake = candidate_2.lower().replace(" ", "_")
+    # Strip common suffixes like "(RTD)" that got baked into the snake name
+    c1_snake = re.sub(r"[^a-z0-9_]", "", c1_snake).strip("_")
+    c2_snake = re.sub(r"[^a-z0-9_]", "", c2_snake).strip("_")
+
+    stations = []
+    for row in reader:
+        if not row or not row[sr_idx].strip():
+            continue
+        sr_no = row[sr_idx].strip()
+        # Skip the Grand Total row
+        if sr_no.lower() in ("", "grand total"):
+            continue
+        try:
+            station_num = int(sr_no)
+        except ValueError:
+            continue
+
+        def _int(idx):
+            if idx is None or idx >= len(row):
+                return None
+            v = row[idx].strip()
+            if not v:
+                return None
+            try:
+                return int(v)
+            except ValueError:
+                return None
+
+        c1_val = _int(c1_idx)
+        c2_val = _int(c2_idx)
+        valid_val = _int(valid_idx)
+        total_val = _int(total_idx)
+
+        form_data = {}
+        if c1_val is not None:
+            form_data[f"{c1_snake}_col3"] = {"type": "regular", "value": c1_val}
+        if c2_val is not None:
+            form_data[f"{c2_snake}_col3"] = {"type": "regular", "value": c2_val}
+        if valid_val is not None:
+            form_data["row_a"] = {"type": "regular", "value": valid_val}
+        if total_val is not None:
+            form_data["row_d"] = {"type": "regular", "value": total_val}
+
+        stations.append({
+            "name": f"Polling Station {station_num}",
+            "pages": [],
+            "form_data": form_data,
+        })
+
+    if not stations:
+        raise HTTPException(400, "CSV has no data rows")
+
+    pdf_name = file.filename
+    if pdf_name.lower().endswith(".csv"):
+        pdf_name = pdf_name[:-4]
+
+    c1_name = candidate_1
+    c2_name = candidate_2
+
+    page_count = len(stations)
+    processed_pages = list(range(len(stations)))
+
+    schema_fields = [
+        {"name": "total_registered_voters", "alias": "Total Registered Voters"},
+        {"name": f"{c1_snake}_col3", "alias": f"{c1_name} Votes column 3"},
+        {"name": f"{c1_snake}_col6", "alias": f"{c1_name} Votes column 6"},
+        {"name": f"{c2_snake}_col3", "alias": f"{c2_name} Votes column 3"},
+        {"name": f"{c2_snake}_col6", "alias": f"{c2_name} Votes column 6"},
+        {"name": "row_a", "alias": "Row A"},
+        {"name": "row_b", "alias": "Row B"},
+        {"name": "row_c", "alias": "Row C"},
+        {"name": "row_d", "alias": "Row D"},
+    ]
+
+    sid = create_session()
+    update_session(
+        sid,
+        pdf_name=pdf_name,
+        pdf_path=None,
+        page_count=page_count,
+        processed_pages=processed_pages,
+        schema_fields=schema_fields,
+        candidate_1_name=c1_name,
+        candidate_1_row=None,
+        candidate_2_name=c2_name,
+        candidate_2_row=None,
+        province=province,
+        seat_type=seat_type,
+    )
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.executemany(
+        "INSERT INTO polling_station_queue (session_id, name, pages, status, form_data, source) "
+        "VALUES (?, ?, ?, 'approved', ?, 'ecp')",
+        [
+            (sid, s["name"], json.dumps(s["pages"]), json.dumps(s["form_data"]))
+            for s in stations
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    return {
+        "session_id": sid,
+        "pdf_name": pdf_name,
+        "station_count": len(stations),
+    }
+
+
 @app.post("/api/upload/bulk")
 async def bulk_upload_pdfs(files: list[UploadFile]):
     """Upload multiple PDFs, each becoming its own session."""

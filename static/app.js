@@ -476,6 +476,104 @@ importCsvSubmit.addEventListener('click', async () => {
     }
 });
 
+// --- Import Form 48 ---
+
+const importForm48Btn = document.getElementById('import-form48-btn');
+const importForm48Input = document.getElementById('import-form48-input');
+const importForm48Modal = document.getElementById('import-form48-modal');
+const importForm48Filename = document.getElementById('import-form48-filename');
+const importForm48Candidate1 = document.getElementById('import-form48-candidate1');
+const importForm48Candidate2 = document.getElementById('import-form48-candidate2');
+const importForm48SeatType = document.getElementById('import-form48-seat-type');
+const importForm48Province = document.getElementById('import-form48-province');
+const importForm48Submit = document.getElementById('import-form48-submit');
+const importForm48Cancel = document.getElementById('import-form48-cancel');
+
+let pendingForm48File = null;
+
+importForm48Btn.addEventListener('click', () => importForm48Input.click());
+
+importForm48Input.addEventListener('change', async () => {
+    const file = importForm48Input.files[0];
+    if (!file) return;
+    pendingForm48File = file;
+    importForm48Filename.textContent = file.name;
+
+    // Read the first line to extract candidate column names
+    const text = await file.text();
+    const firstLine = text.split('\n')[0];
+    // Simple CSV header parse (no quoted commas expected in header)
+    const headers = firstLine.split(',').map(h => h.trim());
+    const skip = new Set(['Sr.No', 'Polling Station', 'Valid', 'Invalid', 'Total', '']);
+    const candidates = headers.filter(h => !skip.has(h));
+
+    // Populate candidate dropdowns
+    importForm48Candidate1.innerHTML = '';
+    importForm48Candidate2.innerHTML = '';
+    for (const c of candidates) {
+        importForm48Candidate1.appendChild(new Option(c, c));
+        importForm48Candidate2.appendChild(new Option(c, c));
+    }
+    // Default second dropdown to second candidate if available
+    if (candidates.length >= 2) {
+        importForm48Candidate2.selectedIndex = 1;
+    }
+
+    // Pre-fill seat type from filename
+    const lname = file.name.toLowerCase();
+    if (/(^|[^a-z])na[-_ ]?\d/.test(lname)) {
+        importForm48SeatType.value = 'National';
+    } else if (/(^|[^a-z])(pp|ps|pk|pb)[-_ ]?\d/.test(lname)) {
+        importForm48SeatType.value = 'Provincial';
+    } else {
+        importForm48SeatType.value = '';
+    }
+    importForm48Province.value = '';
+    importForm48Modal.classList.remove('hidden');
+});
+
+function closeForm48Modal() {
+    importForm48Modal.classList.add('hidden');
+    importForm48Input.value = '';
+    pendingForm48File = null;
+}
+
+importForm48Cancel.addEventListener('click', closeForm48Modal);
+
+importForm48Submit.addEventListener('click', async () => {
+    if (!pendingForm48File) return;
+    const c1 = importForm48Candidate1.value;
+    const c2 = importForm48Candidate2.value;
+    if (!c1 || !c2) { alert('Please select both candidates.'); return; }
+    if (c1 === c2) { alert('Please select two different candidates.'); return; }
+    const province = importForm48Province.value;
+    const seatType = importForm48SeatType.value;
+    if (!province || !seatType) { alert('Please select both province and seat type.'); return; }
+
+    const originalText = importForm48Submit.textContent;
+    importForm48Submit.disabled = true;
+    importForm48Submit.textContent = 'Importing...';
+    try {
+        const fd = new FormData();
+        fd.append('file', pendingForm48File);
+        fd.append('candidate_1', c1);
+        fd.append('candidate_2', c2);
+        fd.append('province', province);
+        fd.append('seat_type', seatType);
+        const res = await fetch('/api/sessions/import-form48', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+        alert(`Imported ${data.station_count} polling stations from ${data.pdf_name}.`);
+        closeForm48Modal();
+        await loadDashboard();
+    } catch (err) {
+        alert(`Error: ${err.message}`);
+    } finally {
+        importForm48Submit.disabled = false;
+        importForm48Submit.textContent = originalText;
+    }
+});
+
 function resetLocalState() {
     pdfInput.value = '';
     uploadStatus.textContent = '';

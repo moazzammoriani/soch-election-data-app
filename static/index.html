@@ -20,6 +20,8 @@
                     <input type="file" id="bulk-upload-input" accept=".pdf" multiple class="hidden">
                     <button id="import-csv-btn" title="Create a session from an exported CSV">Import CSV</button>
                     <input type="file" id="import-csv-input" accept=".csv" class="hidden">
+                    <button id="import-form48-btn" title="Create a session from a Form 48 CSV">Import Form 48</button>
+                    <input type="file" id="import-form48-input" accept=".csv" class="hidden">
                     <button id="import-scheme-btn" title="Replace polling scheme mapping">Import Scheme</button>
                     <input type="file" id="import-scheme-input" accept=".json" class="hidden">
                     <button id="export-scheme-btn" title="Download the current polling scheme mapping as JSON">Export Scheme</button>
@@ -266,6 +268,36 @@
             <div class="modal-actions">
                 <button id="import-csv-submit">Import</button>
                 <button id="import-csv-cancel" class="secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import Form 48 Modal -->
+    <div id="import-form48-modal" class="modal hidden">
+        <div class="modal-content ai-settings-content">
+            <h3>Import Form 48 CSV</h3>
+            <p id="import-form48-filename" class="schema-pdf-info"></p>
+            <label for="import-form48-candidate1">Candidate 1</label>
+            <select id="import-form48-candidate1"></select>
+            <label for="import-form48-candidate2">Candidate 2</label>
+            <select id="import-form48-candidate2"></select>
+            <label for="import-form48-seat-type">Seat Type</label>
+            <select id="import-form48-seat-type">
+                <option value="">Select type</option>
+                <option value="National">National</option>
+                <option value="Provincial">Provincial</option>
+            </select>
+            <label for="import-form48-province">Province</label>
+            <select id="import-form48-province">
+                <option value="">Select province</option>
+                <option value="Punjab">Punjab</option>
+                <option value="Sindh">Sindh</option>
+                <option value="KPK">KPK</option>
+                <option value="Balochistan">Balochistan</option>
+            </select>
+            <div class="modal-actions">
+                <button id="import-form48-submit">Import</button>
+                <button id="import-form48-cancel" class="secondary">Cancel</button>
             </div>
         </div>
     </div>
