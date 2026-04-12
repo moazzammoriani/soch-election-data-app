@@ -2891,6 +2891,8 @@ async def export_polling_stations_csv(session_id: Optional[str] = Cookie(default
                     "form_data": json.loads(pa_row["form_data"]) if pa_row["form_data"] else {},
                 }
 
+        # Collect all candidate-vote field names (col3/col6) across PA form_data
+        pa_candidate_fields: set[str] = set()
         for mr in match_rows:
             entry = pa_data.get((mr["pa_seat"], mr["pa_num"]))
             if entry is None:
@@ -2902,6 +2904,11 @@ async def export_polling_stations_csv(session_id: Optional[str] = Cookie(default
                 "pages": entry["pages"],
                 "form_data": entry["form_data"],
             }
+            for k in entry["form_data"]:
+                if k.endswith("_col3") or k.endswith("_col6"):
+                    pa_candidate_fields.add(k)
+
+        pa_candidate_fields_sorted = sorted(pa_candidate_fields)
 
     conn.close()
 
@@ -2916,6 +2923,9 @@ async def export_polling_stations_csv(session_id: Optional[str] = Cookie(default
         headers.append("pa_pages")
         headers.append("pa_polling_scheme_registered")
         for field in PA_FIXED_FIELDS:
+            headers.append(f"pa_{field}_type")
+            headers.append(f"pa_{field}_value")
+        for field in pa_candidate_fields_sorted:
             headers.append(f"pa_{field}_type")
             headers.append(f"pa_{field}_value")
 
@@ -2947,9 +2957,13 @@ async def export_polling_stations_csv(session_id: Optional[str] = Cookie(default
                     fd = pa_entry["form_data"].get(field, {})
                     row_data.append(fd.get("type", ""))
                     row_data.append(fd.get("value", "") if fd.get("value") is not None else "")
+                for field in pa_candidate_fields_sorted:
+                    fd = pa_entry["form_data"].get(field, {})
+                    row_data.append(fd.get("type", ""))
+                    row_data.append(fd.get("value", "") if fd.get("value") is not None else "")
             else:
                 # Unmatched or PA not yet approved — leave all pa_ cells blank
-                row_data.extend([""] * (4 + 2 * len(PA_FIXED_FIELDS)))
+                row_data.extend([""] * (4 + 2 * len(PA_FIXED_FIELDS) + 2 * len(pa_candidate_fields_sorted)))
 
         writer.writerow(row_data)
 
