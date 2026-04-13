@@ -2119,25 +2119,27 @@ function renderWinnerScatterChart(data) {
     const datasets = data.candidates.map((name, i) => ({
         label: name,
         data: [],
-        backgroundColor: i === 0 ? '#06b6d4' : '#ec4899',
-        pointRadius: 7,
-        pointHoverRadius: 9,
+        backgroundColor: i === 0 ? 'rgba(6, 182, 212, 0.6)' : 'rgba(236, 72, 153, 0.6)',
+        pointRadius: 6,
+        pointHoverRadius: 8,
     }));
-    const tieDataset = { label: 'Tied', data: [], backgroundColor: '#9ca3af', pointRadius: 7, pointHoverRadius: 9 };
+    const tieDataset = { label: 'Tied', data: [], backgroundColor: 'rgba(156, 163, 175, 0.6)', pointRadius: 6, pointHoverRadius: 8 };
 
+    const jitterAmount = 0.15;
     for (const station of data.per_station) {
         if (station.turnout === null) continue;
         const turnoutPct = Math.round(station.turnout * 100 * 10) / 10; // e.g. 65.3%
         const maxVotes = Math.max(...station.votes);
         if (maxVotes === 0) continue;
 
+        const jitter = (Math.random() - 0.5) * 2 * jitterAmount;
         const winners = station.votes.filter(v => v === maxVotes);
         if (winners.length > 1) {
-            tieDataset.data.push({ x: turnoutPct, y: -1, stationName: station.name });
+            tieDataset.data.push({ x: turnoutPct, y: -1 + jitter, stationName: station.name });
         } else {
             const winnerIdx = station.votes.indexOf(maxVotes);
-            // y = 1 for candidate 1 (top), y = 0 for candidate 2 (bottom)
-            datasets[winnerIdx].data.push({ x: turnoutPct, y: winnerIdx === 0 ? 1 : 0, stationName: station.name });
+            const baseY = winnerIdx === 0 ? 1 : 0;
+            datasets[winnerIdx].data.push({ x: turnoutPct, y: baseY + jitter, stationName: station.name });
         }
     }
 
@@ -2179,7 +2181,10 @@ function renderWinnerScatterChart(data) {
                         },
                     },
                     title: { display: false },
-                    grid: { display: false },
+                    grid: {
+                        drawOnChartArea: true,
+                        color: (ctx) => ctx.tick.value === 0 || ctx.tick.value === 1 ? '#e5e7eb' : 'transparent',
+                    },
                 },
             },
         },
