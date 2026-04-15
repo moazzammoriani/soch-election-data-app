@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 import cv2
 import numpy as np
 import fitz
+from PIL import Image
+from ocr.processing.preprocessing import rotate as ocr_rotate
 from fastapi import FastAPI, UploadFile, HTTPException, Cookie, Response as FastAPIResponse, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
@@ -2515,6 +2517,11 @@ async def extract_page_images(pdf_path: str, pages: list[int], dpi: int = 150, d
             if pix.n == 4:
                 img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
             if deskew:
+                rotated = ocr_rotate(Image.fromarray(img))
+                if rotated.is_ok():
+                    img = np.asarray(rotated.unwrap())
+                else:
+                    print(f"[rotate] page {page_num + 1}: {rotated.result.message}", flush=True)
                 img, skew_angle = deskew_image(img)
                 angles.append(skew_angle)
             else:
