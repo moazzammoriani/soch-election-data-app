@@ -498,7 +498,7 @@ class RenamePollingStationRequest(BaseModel):
 
 
 class RenumberRequest(BaseModel):
-    from_number: int
+    station_ids: list[int]
     offset: int
 
 
@@ -2441,11 +2441,13 @@ async def rename_polling_station(station_id: int, req: RenamePollingStationReque
 
 @app.post("/api/polling-stations/renumber")
 async def renumber_polling_stations(req: RenumberRequest, session_id: Optional[str] = Cookie(default=None)):
-    """Bulk rename stations: all stations with trailing number >= from_number get offset added."""
+    """Bulk rename selected stations by adding offset to their trailing number."""
     if not session_id:
         raise HTTPException(400, "No session")
     if req.offset == 0:
         raise HTTPException(400, "Offset cannot be zero")
+    if not req.station_ids:
+        raise HTTPException(400, "No stations selected")
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -2456,24 +2458,24 @@ async def renumber_polling_stations(req: RenumberRequest, session_id: Optional[s
     ).fetchall()
 
     pattern = re.compile(r'(\d+)\s*$')
+    selected_id_set = set(req.station_ids)
 
-    # Parse trailing numbers and split into selected vs unselected
+    # Split rows into selected (target of renumber) vs unselected (collision targets)
     selected = []  # (id, name, parsed_number)
     unselected_names = set()
     for row in rows:
-        m = pattern.search(row["name"])
-        if m:
-            num = int(m.group(1))
-            if num >= req.from_number:
-                selected.append((row["id"], row["name"], num))
-            else:
-                unselected_names.add(row["name"])
+        if row["id"] in selected_id_set:
+            m = pattern.search(row["name"])
+            if not m:
+                conn.close()
+                raise HTTPException(400, f"Station '{row['name']}' has no trailing number to renumber")
+            selected.append((row["id"], row["name"], int(m.group(1))))
         else:
             unselected_names.add(row["name"])
 
     if not selected:
         conn.close()
-        raise HTTPException(400, f"No stations found with number >= {req.from_number}")
+        raise HTTPException(400, "No selected stations found in this session")
 
     # Compute new names and check for collisions
     renames = []

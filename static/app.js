@@ -974,15 +974,13 @@ async function startRename(stationId) {
 }
 
 document.getElementById('renumber-btn').addEventListener('click', async () => {
-    const fromStr = prompt('Renumber stations starting from station #:');
-    if (fromStr === null) return;
-    const fromNumber = parseInt(fromStr);
-    if (isNaN(fromNumber) || fromNumber < 1) {
-        alert('Please enter a valid station number');
+    const stationIds = [...selectedStations];
+    if (stationIds.length === 0) {
+        alert('Select at least one polling station to renumber');
         return;
     }
 
-    const offsetStr = prompt('Offset (e.g., 1 to increment, -1 to decrement):');
+    const offsetStr = prompt(`Renumber ${stationIds.length} selected station(s). Offset (e.g., 1 to increment, -1 to decrement):`);
     if (offsetStr === null) return;
     const offset = parseInt(offsetStr);
     if (isNaN(offset) || offset === 0) {
@@ -994,7 +992,7 @@ document.getElementById('renumber-btn').addEventListener('click', async () => {
         const res = await fetch('/api/polling-stations/renumber', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ from_number: fromNumber, offset }),
+            body: JSON.stringify({ station_ids: stationIds, offset }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail);
